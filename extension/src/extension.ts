@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import * as fs from "fs";
 import * as path from "path";
+import * as os from "os";
 import { StatusBarManager } from "./statusbar";
 import { registerCommands } from "./commands";
 import { autoConfigureMcp } from "./mcp-config";
@@ -33,6 +34,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
 export function deactivate(): void {}
 
+/**
+ * Resolve the focal binary path using platform-aware detection:
+ * 1. User-configured path (focal.coreBinaryPath)
+ * 2. Platform-specific bundled binary (extension/bin/focal or focal.exe)
+ * 3. Fall back to PATH lookup
+ */
 function resolveBinaryPath(extensionPath: string): string {
   const configured = vscode.workspace
     .getConfiguration("focal")
@@ -40,9 +47,12 @@ function resolveBinaryPath(extensionPath: string): string {
   if (configured && fs.existsSync(configured)) {
     return configured;
   }
-  const bundled = path.join(extensionPath, "bin", "focal");
+
+  const binaryName = os.platform() === "win32" ? "focal.exe" : "focal";
+  const bundled = path.join(extensionPath, "bin", binaryName);
   if (fs.existsSync(bundled)) {
     return bundled;
   }
+
   return "focal";
 }

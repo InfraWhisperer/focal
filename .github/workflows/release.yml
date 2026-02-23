@@ -25,6 +25,9 @@ jobs:
           - target: aarch64-apple-darwin
             os: macos-latest
             artifact: focal-darwin-arm64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            artifact: focal-windows-amd64.exe
 
     runs-on: ${{ matrix.os }}
     steps:
@@ -45,11 +48,18 @@ jobs:
       - name: Build
         run: cargo build --release --target ${{ matrix.target }}
 
-      - name: Package binary
+      - name: Package binary (Unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p dist
           cp target/${{ matrix.target }}/release/focal dist/${{ matrix.artifact }}
           chmod +x dist/${{ matrix.artifact }}
+
+      - name: Package binary (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          mkdir dist
+          copy target\${{ matrix.target }}\release\focal.exe dist\${{ matrix.artifact }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -57,8 +67,69 @@ jobs:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}
 
-  release:
+  package-vsix:
     needs: build
+    strategy:
+      matrix:
+        include:
+          - platform: linux-x64
+            binary: focal-linux-amd64
+          - platform: linux-arm64
+            binary: focal-linux-arm64
+          - platform: darwin-x64
+            binary: focal-darwin-amd64
+          - platform: darwin-arm64
+            binary: focal-darwin-arm64
+          - platform: win32-x64
+            binary: focal-windows-amd64.exe
+
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Download binary
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.binary }}
+          path: extension/bin
+
+      - name: Make binary executable
+        if: matrix.platform != 'win32-x64'
+        run: chmod +x extension/bin/${{ matrix.binary }}
+
+      - name: Rename to standard name
+        run: |
+          cd extension/bin
+          if [ "${{ matrix.platform }}" = "win32-x64" ]; then
+            mv ${{ matrix.binary }} focal.exe
+          else
+            mv ${{ matrix.binary }} focal
+          fi
+
+      - name: Install dependencies and build extension
+        working-directory: extension
+        run: |
+          npm install
+          npm run compile
+          npm install -g @vscode/vsce
+
+      - name: Package platform VSIX
+        working-directory: extension
+        run: vsce package --target ${{ matrix.platform }} -o focal-${{ matrix.platform }}.vsix
+
+      - name: Upload VSIX
+        uses: actions/upload-artifact@v4
+        with:
+          name: vsix-${{ matrix.platform }}
+          path: extension/focal-${{ matrix.platform }}.vsix
+
+  release:
+    needs: [build, package-vsix]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

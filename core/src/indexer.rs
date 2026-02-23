@@ -314,6 +314,7 @@ impl<'a> Indexer<'a> {
     }
 
     /// Recursively insert extracted symbols and their children. Returns the count inserted.
+    /// Computes a SHA-256 hash of each symbol's body for content-aware memory staleness.
     fn insert_symbols_recursive(
         &self,
         file_id: i64,
@@ -322,12 +323,18 @@ impl<'a> Indexer<'a> {
     ) -> Result<usize> {
         let mut count = 0;
         for sym in symbols {
+            let body_hash = {
+                let mut hasher = Sha256::new();
+                hasher.update(sym.body.as_bytes());
+                format!("{:x}", hasher.finalize())
+            };
             let sym_id = self.db.insert_symbol(
                 file_id,
                 &sym.name,
                 sym.kind.as_str(),
                 &sym.signature,
                 &sym.body,
+                &body_hash,
                 sym.start_line as i64,
                 sym.end_line as i64,
                 parent_id,

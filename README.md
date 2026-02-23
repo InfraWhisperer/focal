@@ -48,13 +48,26 @@ Focal fixes this by giving Claude a persistent, queryable model of your code's s
 
 ### Install
 
+**Pre-built binaries** (recommended):
+
+Download the latest release for your platform from [GitHub Releases](https://github.com/InfraWhisperer/focal/releases). Platform-specific VS Code extensions (`.vsix`) are also available — each bundles the native binary so there's no separate install step.
+
+| Platform | Binary | VSIX |
+|----------|--------|------|
+| Linux x64 | `focal-linux-amd64` | `focal-linux-x64.vsix` |
+| Linux ARM64 | `focal-linux-arm64` | `focal-linux-arm64.vsix` |
+| macOS x64 | `focal-darwin-amd64` | `focal-darwin-x64.vsix` |
+| macOS ARM64 | `focal-darwin-arm64` | `focal-darwin-arm64.vsix` |
+| Windows x64 | `focal-windows-amd64.exe` | `focal-win32-x64.vsix` |
+
+**Build from source:**
+
 ```bash
-# Build the binary
 git clone https://github.com/InfraWhisperer/focal.git
 cd focal
 cargo build --release
 
-# The binary is at target/release/focal
+# The binary is at target/release/focal (or focal.exe on Windows)
 ```
 
 ### Run standalone (CLI)
@@ -151,9 +164,9 @@ That's it. Claude Code now has access to all 19 MCP tools.
 |------|-------------|
 | `get_context` | Smart context retrieval with intent detection and token budgeting. Given a task description, returns a **context capsule**: pivot symbols with full source, adjacent symbols skeletonized to signatures. Stays within a configurable token budget (default 12K). |
 | `query_symbol` | Look up a symbol by name. Returns signature, body, file location, and linked memories. |
-| `search_code` | FTS5 full-text search across symbol bodies and signatures. |
+| `search_code` | FTS5 full-text search across symbol bodies and signatures. When invoked via `get_context` with debug intent, recently-changed files are boosted in ranking. |
 | `get_skeleton` | Signatures-only view of a file. 70-90% token reduction vs reading the full file. |
-| `batch_query` | Fetch multiple symbols in one call with a shared token budget. |
+| `batch_query` | Fetch multiple symbols in one call with a shared token budget. Returns **dependency hints** — unseen interfaces, traits, and imports referenced by the queried symbols but not included in the results. |
 
 ### Graph Analysis
 
@@ -194,10 +207,12 @@ That's it. Claude Code now has access to all 19 MCP tools.
 
 When you call `get_context("fix the panic in handleRequest")`, Focal classifies the intent as `debug` and adjusts retrieval — prioritizing error paths and callers over, say, type definitions. Four intents:
 
-- **debug** — error paths, callers, panic sites (keywords: fix, bug, crash, panic, broken)
+- **debug** — error paths, callers, panic sites (keywords: fix, bug, crash, panic, broken). FTS5 search applies a **recency bias** that boosts recently-changed files, since bugs correlate with recent edits.
 - **refactor** — blast radius, dependents (keywords: refactor, rename, extract, split)
 - **modify** — feature scope, related types (keywords: add, implement, create, build)
 - **explore** — default balanced retrieval when no strong signal
+
+Recency bias is gated to debug intent only — applying it globally would pollute refactor and explore queries with recency noise.
 
 ### Progressive Disclosure
 
@@ -205,7 +220,15 @@ The first time Claude requests a symbol in a session, it gets the full body. Sub
 
 ### Memory System
 
-Memories persist across sessions in SQLite. They're linked to symbols, so when a file changes, linked memories get marked stale automatically. Retrieval ranks memories using:
+Memories persist across sessions in SQLite. They're linked to symbols, so when a file changes, linked memories are evaluated automatically using **body-hash comparison**. Each symbol's body is SHA-256 hashed at index time. When a file is re-indexed:
+
+- If a symbol's name survives but its body hash changed → the linked memory enters **`needs_review`** state (the decision might still be valid, but the underlying code changed)
+- If a symbol disappears entirely → the memory is marked **stale**
+- If the symbol and its body are unchanged → the memory stays **fresh**
+
+This three-state model (`fresh` / `needs_review` / `stale`) avoids the false-positive problem where a renamed variable would incorrectly invalidate an architectural decision about the function.
+
+Retrieval ranks memories using:
 
 | Signal | Weight | Description |
 |--------|--------|-------------|

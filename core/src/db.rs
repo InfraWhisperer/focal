@@ -32,6 +32,7 @@ pub struct Symbol {
     pub kind: String,
     pub signature: String,
     pub body: String,
+    pub body_hash: String,
     pub start_line: i64,
     pub end_line: i64,
     pub parent_id: Option<i64>,
@@ -54,6 +55,9 @@ pub struct Memory {
     pub session_id: String,
     pub created_at: String,
     pub stale: bool,
+    /// Set when a linked symbol's body changed but its name still matches.
+    /// The memory may still be valid but should be verified against the new code.
+    pub needs_review: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -68,6 +72,9 @@ pub struct SymbolResult {
     pub start_line: i64,
     pub end_line: i64,
     pub memories: Vec<Memory>,
+    /// Hints about unseen dependencies (e.g. "Implements trait Foo (not in context)")
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub dependency_hints: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -198,6 +205,7 @@ impl Database {
                 kind       TEXT NOT NULL,
                 signature  TEXT NOT NULL DEFAULT '',
                 body       TEXT NOT NULL DEFAULT '',
+                body_hash  TEXT NOT NULL DEFAULT '',
                 start_line INTEGER NOT NULL,
                 end_line   INTEGER NOT NULL,
                 parent_id  INTEGER REFERENCES symbols(id) ON DELETE SET NULL
@@ -211,13 +219,14 @@ impl Database {
             );
 
             CREATE TABLE IF NOT EXISTS memories (
-                id         INTEGER PRIMARY KEY,
-                content    TEXT NOT NULL,
-                category   TEXT NOT NULL,
-                source     TEXT NOT NULL DEFAULT 'manual',
-                session_id TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL DEFAULT (datetime('now')),
-                stale      INTEGER NOT NULL DEFAULT 0
+                id            INTEGER PRIMARY KEY,
+                content       TEXT NOT NULL,
+                category      TEXT NOT NULL,
+                source        TEXT NOT NULL DEFAULT 'manual',
+                session_id    TEXT NOT NULL DEFAULT '',
+                created_at    TEXT NOT NULL DEFAULT (datetime('now')),
+                stale         INTEGER NOT NULL DEFAULT 0,
+                needs_review  INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS memory_symbols (
@@ -254,6 +263,39 @@ impl Database {
             "CREATE VIRTUAL TABLE IF NOT EXISTS memories_fts
              USING fts5(content, category, content=memories, content_rowid=id);",
         )?;
+
+        // Additive migrations for existing databases. Each uses a conditional
+        // check so they're idempotent — safe to run on every startup.
+        self.apply_additive_migrations()?;
+
+        Ok(())
+    }
+
+    /// Column additions for existing databases. Each migration checks whether
+    /// the column already exists before altering the table, so this is safe
+    /// to call on every startup.
+    fn apply_additive_migrations(&self) -> Result<()> {
+        // v0.2.0: body_hash on symbols for content-aware memory staleness
+        let has_body_hash: bool = self
+            .conn
+            .prepare("SELECT body_hash FROM symbols LIMIT 0")
+            .is_ok();
+        if !has_body_hash {
+            self.conn.execute_batch(
+                "ALTER TABLE symbols ADD COLUMN body_hash TEXT NOT NULL DEFAULT '';"
+            )?;
+        }
+
+        // v0.2.0: needs_review on memories for body-changed-but-name-same detection
+        let has_needs_review: bool = self
+            .conn
+            .prepare("SELECT needs_review FROM memories LIMIT 0")
+            .is_ok();
+        if !has_needs_review {
+            self.conn.execute_batch(
+                "ALTER TABLE memories ADD COLUMN needs_review INTEGER NOT NULL DEFAULT 0;"
+            )?;
+        }
 
         Ok(())
     }
@@ -442,14 +484,15 @@ impl Database {
         kind: &str,
         signature: &str,
         body: &str,
+        body_hash: &str,
         start_line: i64,
         end_line: i64,
         parent_id: Option<i64>,
     ) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO symbols (file_id, name, kind, signature, body, start_line, end_line, parent_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            params![file_id, name, kind, signature, body, start_line, end_line, parent_id],
+            "INSERT INTO symbols (file_id, name, kind, signature, body, body_hash, start_line, end_line, parent_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+            params![file_id, name, kind, signature, body, body_hash, start_line, end_line, parent_id],
         )?;
         let id = self.conn.last_insert_rowid();
         // Maintain FTS index incrementally
@@ -462,7 +505,7 @@ impl Database {
 
     pub fn get_symbols_by_file(&self, file_id: i64) -> Result<Vec<Symbol>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, file_id, name, kind, signature, body, start_line, end_line, parent_id
+            "SELECT id, file_id, name, kind, signature, body, body_hash, start_line, end_line, parent_id
              FROM symbols WHERE file_id = ?1 ORDER BY start_line",
         )?;
         let rows = stmt.query_map(params![file_id], |row| {
@@ -473,9 +516,10 @@ impl Database {
                 kind: row.get(3)?,
                 signature: row.get(4)?,
                 body: row.get(5)?,
-                start_line: row.get(6)?,
-                end_line: row.get(7)?,
-                parent_id: row.get(8)?,
+                body_hash: row.get(6)?,
+                start_line: row.get(7)?,
+                end_line: row.get(8)?,
+                parent_id: row.get(9)?,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -499,7 +543,7 @@ impl Database {
             .conn
             .query_row(
                 "SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.body,
-                        s.start_line, s.end_line, s.parent_id
+                        s.body_hash, s.start_line, s.end_line, s.parent_id
                  FROM symbols s
                  JOIN files f ON f.id = s.file_id
                  WHERE f.repo_id = ?1 AND s.name = ?2
@@ -513,9 +557,10 @@ impl Database {
                         kind: row.get(3)?,
                         signature: row.get(4)?,
                         body: row.get(5)?,
-                        start_line: row.get(6)?,
-                        end_line: row.get(7)?,
-                        parent_id: row.get(8)?,
+                        body_hash: row.get(6)?,
+                        start_line: row.get(7)?,
+                        end_line: row.get(8)?,
+                        parent_id: row.get(9)?,
                     })
                 },
             )
@@ -528,7 +573,7 @@ impl Database {
             .conn
             .query_row(
                 "SELECT id, file_id, name, kind, signature, body,
-                        start_line, end_line, parent_id
+                        body_hash, start_line, end_line, parent_id
                  FROM symbols WHERE name = ?1 ORDER BY id LIMIT 1",
                 params![name],
                 |row| {
@@ -539,9 +584,10 @@ impl Database {
                         kind: row.get(3)?,
                         signature: row.get(4)?,
                         body: row.get(5)?,
-                        start_line: row.get(6)?,
-                        end_line: row.get(7)?,
-                        parent_id: row.get(8)?,
+                        body_hash: row.get(6)?,
+                        start_line: row.get(7)?,
+                        end_line: row.get(8)?,
+                        parent_id: row.get(9)?,
                     })
                 },
             )
@@ -596,7 +642,7 @@ impl Database {
         repo_name: &str,
     ) -> Result<Vec<SymbolResult>> {
         let mut sql = String::from(
-            "SELECT s.id, s.name, s.kind, s.signature, s.body,
+            "SELECT s.id, s.name, s.kind, s.signature, s.body, s.body_hash,
                     f.path, r.name, s.start_line, s.end_line
              FROM symbols s
              JOIN files f ON f.id = s.file_id
@@ -635,11 +681,12 @@ impl Database {
                 kind: row.get(2)?,
                 signature: row.get(3)?,
                 body: row.get(4)?,
-                file_path: row.get(5)?,
-                repo_name: row.get(6)?,
-                start_line: row.get(7)?,
-                end_line: row.get(8)?,
+                file_path: row.get(6)?,
+                repo_name: row.get(7)?,
+                start_line: row.get(8)?,
+                end_line: row.get(9)?,
                 memories: Vec::new(), // filled below
+                dependency_hints: Vec::new(), // filled later if requested
             })
         })?;
 
@@ -675,7 +722,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT e.id, e.source_id, e.target_id, e.kind,
                     s.id, s.file_id, s.name, s.kind, s.signature, s.body,
-                    s.start_line, s.end_line, s.parent_id
+                    s.body_hash, s.start_line, s.end_line, s.parent_id
              FROM edges e
              JOIN symbols s ON s.id = e.target_id
              WHERE e.source_id = ?1",
@@ -695,9 +742,10 @@ impl Database {
                     kind: row.get(7)?,
                     signature: row.get(8)?,
                     body: row.get(9)?,
-                    start_line: row.get(10)?,
-                    end_line: row.get(11)?,
-                    parent_id: row.get(12)?,
+                    body_hash: row.get(10)?,
+                    start_line: row.get(11)?,
+                    end_line: row.get(12)?,
+                    parent_id: row.get(13)?,
                 },
             ))
         })?;
@@ -710,7 +758,7 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT e.id, e.source_id, e.target_id, e.kind,
                     s.id, s.file_id, s.name, s.kind, s.signature, s.body,
-                    s.start_line, s.end_line, s.parent_id
+                    s.body_hash, s.start_line, s.end_line, s.parent_id
              FROM edges e
              JOIN symbols s ON s.id = e.source_id
              WHERE e.target_id = ?1",
@@ -730,14 +778,47 @@ impl Database {
                     kind: row.get(7)?,
                     signature: row.get(8)?,
                     body: row.get(9)?,
-                    start_line: row.get(10)?,
-                    end_line: row.get(11)?,
-                    parent_id: row.get(12)?,
+                    body_hash: row.get(10)?,
+                    start_line: row.get(11)?,
+                    end_line: row.get(12)?,
+                    parent_id: row.get(13)?,
                 },
             ))
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
+    }
+
+    /// Return dependency hints for a symbol: names and kinds of symbols it
+    /// depends on via type_ref or imports edges. Used to warn the LLM about
+    /// interfaces/traits not included in the current context.
+    pub fn get_dependency_hint_names(
+        &self,
+        symbol_id: i64,
+        _exclude_ids: &std::collections::HashSet<i64>,
+    ) -> Result<Vec<(String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.name, s.kind, e.kind
+             FROM edges e
+             JOIN symbols s ON s.id = e.target_id
+             WHERE e.source_id = ?1
+               AND e.kind IN ('type_ref', 'imports', 'calls')",
+        )?;
+        let rows = stmt.query_map(params![symbol_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        let mut hints = Vec::new();
+        for r in rows {
+            let (name, kind, edge_kind) = r?;
+            // Only hint about symbols not already in the result set
+            // We can't check by ID here (we have names), so caller filters by ID
+            hints.push((name, kind, edge_kind));
+        }
+        Ok(hints)
     }
 
     pub fn delete_edges_by_file(&self, file_id: i64) -> Result<usize> {
@@ -850,7 +931,7 @@ impl Database {
     ) -> Result<Vec<Memory>> {
         let mut sql = String::from(
             "SELECT DISTINCT m.id, m.content, m.category, m.source, m.session_id,
-                    m.created_at, m.stale
+                    m.created_at, m.stale, m.needs_review
              FROM memories m",
         );
 
@@ -895,6 +976,7 @@ impl Database {
                 session_id: row.get(4)?,
                 created_at: row.get(5)?,
                 stale: row.get::<_, i64>(6)? != 0,
+                needs_review: row.get::<_, i64>(7)? != 0,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -908,14 +990,14 @@ impl Database {
     ) -> Result<Vec<Memory>> {
         let sql = if include_stale {
             "SELECT m.id, m.content, m.category, m.source, m.session_id,
-                    m.created_at, m.stale
+                    m.created_at, m.stale, m.needs_review
              FROM memories m
              JOIN memory_symbols ms ON ms.memory_id = m.id
              WHERE ms.symbol_id = ?1
              ORDER BY m.created_at DESC"
         } else {
             "SELECT m.id, m.content, m.category, m.source, m.session_id,
-                    m.created_at, m.stale
+                    m.created_at, m.stale, m.needs_review
              FROM memories m
              JOIN memory_symbols ms ON ms.memory_id = m.id
              WHERE ms.symbol_id = ?1 AND m.stale = 0
@@ -932,6 +1014,7 @@ impl Database {
                 session_id: row.get(4)?,
                 created_at: row.get(5)?,
                 stale: row.get::<_, i64>(6)? != 0,
+                needs_review: row.get::<_, i64>(7)? != 0,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -952,7 +1035,7 @@ impl Database {
         let stale_filter = if include_stale { "" } else { " AND m.stale = 0" };
         let sql = format!(
             "SELECT ms.symbol_id, m.id, m.content, m.category, m.source, m.session_id,
-                    m.created_at, m.stale
+                    m.created_at, m.stale, m.needs_review
              FROM memories m
              JOIN memory_symbols ms ON ms.memory_id = m.id
              WHERE ms.symbol_id IN ({placeholders}){stale_filter}
@@ -972,6 +1055,7 @@ impl Database {
                     session_id: row.get(5)?,
                     created_at: row.get(6)?,
                     stale: row.get::<_, i64>(7)? != 0,
+                    needs_review: row.get::<_, i64>(8)? != 0,
                 },
             ))
         })?;
@@ -987,7 +1071,7 @@ impl Database {
         let r = self
             .conn
             .query_row(
-                "SELECT id, content, category, source, session_id, created_at, stale
+                "SELECT id, content, category, source, session_id, created_at, stale, needs_review
                  FROM memories WHERE id = ?1",
                 params![memory_id],
                 |row| {
@@ -999,6 +1083,7 @@ impl Database {
                         session_id: row.get(4)?,
                         created_at: row.get(5)?,
                         stale: row.get::<_, i64>(6)? != 0,
+                        needs_review: row.get::<_, i64>(7)? != 0,
                     })
                 },
             )
@@ -1057,52 +1142,72 @@ impl Database {
         Ok(())
     }
 
-    /// Collect (memory_id, symbol_name) pairs for all memories linked to
-    /// symbols in `file_id`. Used to re-link memories after re-indexing.
-    pub fn collect_memory_symbol_names(&self, file_id: i64) -> Result<Vec<(i64, String)>> {
+    /// Collect (memory_id, symbol_name, body_hash) tuples for all memories linked
+    /// to symbols in `file_id`. Used to re-link memories after re-indexing and
+    /// detect body changes that warrant a needs_review flag.
+    pub fn collect_memory_symbol_names(&self, file_id: i64) -> Result<Vec<(i64, String, String)>> {
         let mut stmt = self.conn.prepare(
-            "SELECT ms.memory_id, s.name
+            "SELECT ms.memory_id, s.name, s.body_hash
              FROM memory_symbols ms
              JOIN symbols s ON s.id = ms.symbol_id
              WHERE s.file_id = ?1",
         )?;
         let rows = stmt.query_map(params![file_id], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
             .map_err(Into::into)
     }
 
     /// Re-link memories to newly-inserted symbols by matching symbol name
-    /// within `file_id`. Also clears the stale flag on successfully re-linked
-    /// memories since the symbol they reference still exists.
+    /// within `file_id`. Compares body hashes to detect semantic changes:
+    /// - Name matches, body unchanged → clear stale, clear needs_review
+    /// - Name matches, body changed → clear stale, set needs_review
+    /// - Name gone → memory stays stale
     pub fn relink_memories_to_symbols(
         &self,
         file_id: i64,
-        links: &[(i64, String)],
+        links: &[(i64, String, String)],
     ) -> Result<usize> {
         let mut relinked = 0;
-        for (memory_id, sym_name) in links {
+        for (memory_id, sym_name, old_body_hash) in links {
             // Find the new symbol with the same name in the same file
-            let new_sym_id: Option<i64> = self
+            let new_sym: Option<(i64, String)> = self
                 .conn
                 .query_row(
-                    "SELECT id FROM symbols WHERE file_id = ?1 AND name = ?2 LIMIT 1",
+                    "SELECT id, body_hash FROM symbols WHERE file_id = ?1 AND name = ?2 LIMIT 1",
                     params![file_id, sym_name],
-                    |row| row.get(0),
+                    |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()?;
 
-            if let Some(sid) = new_sym_id {
+            if let Some((sid, new_body_hash)) = new_sym {
                 self.conn.execute(
                     "INSERT OR IGNORE INTO memory_symbols (memory_id, symbol_id) VALUES (?1, ?2)",
                     params![memory_id, sid],
                 )?;
-                // Clear stale flag — the symbol still exists under the same name
-                self.conn.execute(
-                    "UPDATE memories SET stale = 0 WHERE id = ?1",
-                    params![memory_id],
-                )?;
+
+                let body_changed = !old_body_hash.is_empty()
+                    && !new_body_hash.is_empty()
+                    && old_body_hash != &new_body_hash;
+
+                if body_changed {
+                    // Symbol name survived but implementation changed — flag for review
+                    self.conn.execute(
+                        "UPDATE memories SET stale = 0, needs_review = 1 WHERE id = ?1",
+                        params![memory_id],
+                    )?;
+                } else {
+                    // Symbol unchanged or hash not yet populated — clear both flags
+                    self.conn.execute(
+                        "UPDATE memories SET stale = 0, needs_review = 0 WHERE id = ?1",
+                        params![memory_id],
+                    )?;
+                }
                 relinked += 1;
             }
         }
@@ -1148,7 +1253,7 @@ impl Database {
         let manual_memories = {
             let mut stmt = self.conn.prepare(
                 "SELECT m.id, m.content, m.category, m.source, m.session_id,
-                        m.created_at, m.stale
+                        m.created_at, m.stale, m.needs_review
                  FROM memories m
                  WHERE m.source = 'manual' AND m.stale = 0
                  ORDER BY m.created_at DESC
@@ -1163,6 +1268,7 @@ impl Database {
                     session_id: row.get(4)?,
                     created_at: row.get(5)?,
                     stale: row.get::<_, i64>(6)? != 0,
+                    needs_review: row.get::<_, i64>(7)? != 0,
                 })
             })?;
             rows.collect::<std::result::Result<Vec<_>, _>>()?
@@ -1172,7 +1278,7 @@ impl Database {
         let auto_observations = {
             let mut stmt = self.conn.prepare(
                 "SELECT m.id, m.content, m.category, m.source, m.session_id,
-                        m.created_at, m.stale
+                        m.created_at, m.stale, m.needs_review
                  FROM memories m
                  WHERE m.session_id = ?1 AND m.source != 'manual' AND m.stale = 0
                  ORDER BY m.created_at ASC",
@@ -1186,6 +1292,7 @@ impl Database {
                     session_id: row.get(4)?,
                     created_at: row.get(5)?,
                     stale: row.get::<_, i64>(6)? != 0,
+                    needs_review: row.get::<_, i64>(7)? != 0,
                 })
             })?;
             rows.collect::<std::result::Result<Vec<_>, _>>()?
@@ -1253,7 +1360,7 @@ impl Database {
 
         let mut stmt = self.conn.prepare(
             "SELECT m.id, m.content, m.category, m.source, m.session_id,
-                    m.created_at, m.stale
+                    m.created_at, m.stale, m.needs_review
              FROM memories_fts fts
              JOIN memories m ON m.id = fts.rowid
              WHERE memories_fts MATCH ?1
@@ -1269,6 +1376,7 @@ impl Database {
                 session_id: row.get(4)?,
                 created_at: row.get(5)?,
                 stale: row.get::<_, i64>(6)? != 0,
+                needs_review: row.get::<_, i64>(7)? != 0,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -1294,7 +1402,7 @@ impl Database {
 
         let mut sql = String::from(
             "SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.body,
-                    s.start_line, s.end_line, s.parent_id
+                    s.body_hash, s.start_line, s.end_line, s.parent_id
              FROM symbols_fts fts
              JOIN symbols s ON s.id = fts.rowid",
         );
@@ -1343,9 +1451,96 @@ impl Database {
                 kind: row.get(3)?,
                 signature: row.get(4)?,
                 body: row.get(5)?,
-                start_line: row.get(6)?,
-                end_line: row.get(7)?,
-                parent_id: row.get(8)?,
+                body_hash: row.get(6)?,
+                start_line: row.get(7)?,
+                end_line: row.get(8)?,
+                parent_id: row.get(9)?,
+            })
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// FTS search with optional recency bias. When `recency_boost` > 0, files
+    /// indexed within the last 48 hours get a ranking boost proportional to the
+    /// value. Intended for debug-intent queries where recent changes correlate
+    /// with the bug being investigated.
+    pub fn search_code_with_recency(
+        &self,
+        query: &str,
+        kind: &str,
+        repo_id: Option<i64>,
+        max_results: i64,
+        recency_boost: f64,
+    ) -> Result<Vec<Symbol>> {
+        if recency_boost <= 0.0 {
+            return self.search_code(query, kind, repo_id, max_results);
+        }
+
+        let fts_query: String = query
+            .split_whitespace()
+            .map(|token| format!("\"{}\"", token.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" ");
+
+        // Recency-boosted ranking: multiply FTS5 rank by a decay factor based on
+        // file indexed_at. Files touched within 48h get up to (1 + recency_boost)
+        // multiplier; older files get 1.0 (no penalty).
+        let mut sql = "SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.body,
+                    s.body_hash, s.start_line, s.end_line, s.parent_id
+             FROM symbols_fts fts
+             JOIN symbols s ON s.id = fts.rowid
+             JOIN files f ON f.id = s.file_id".to_string();
+
+        if repo_id.is_some() {
+            // already joined files
+        }
+
+        sql.push_str(" WHERE symbols_fts MATCH ?1");
+
+        let mut param_values: Vec<Box<dyn rusqlite::types::ToSql>> = Vec::new();
+        param_values.push(Box::new(fts_query));
+        let mut idx = 2;
+
+        if !kind.is_empty() {
+            sql.push_str(&format!(" AND s.kind = ?{idx}"));
+            param_values.push(Box::new(kind.to_string()));
+            idx += 1;
+        }
+        if let Some(rid) = repo_id {
+            sql.push_str(&format!(" AND f.repo_id = ?{idx}"));
+            param_values.push(Box::new(rid));
+            idx += 1;
+        }
+
+        // rank is negative in FTS5 (lower = better), so we multiply by a
+        // factor < 1.0 for recent files to make them rank higher.
+        // recency_factor: 1.0 for old files, (1 - boost*decay) for recent.
+        sql.push_str(&format!(
+            " ORDER BY rank * (1.0 - ?{idx} * MAX(0.0, \
+             (julianday(f.indexed_at) - julianday('now', '-2 days')) / 2.0)) \
+             LIMIT ?{}",
+            idx + 1
+        ));
+        param_values.push(Box::new(recency_boost));
+        param_values.push(Box::new(max_results));
+
+        let params_refs: Vec<&dyn rusqlite::types::ToSql> =
+            param_values.iter().map(|b| b.as_ref()).collect();
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(params_refs.as_slice(), |row| {
+            Ok(Symbol {
+                id: row.get(0)?,
+                file_id: row.get(1)?,
+                name: row.get(2)?,
+                kind: row.get(3)?,
+                signature: row.get(4)?,
+                body: row.get(5)?,
+                body_hash: row.get(6)?,
+                start_line: row.get(7)?,
+                end_line: row.get(8)?,
+                parent_id: row.get(9)?,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -1380,7 +1575,7 @@ impl Database {
         };
         let mut sql = format!(
             "SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.body,
-                    s.start_line, s.end_line, s.parent_id
+                    s.body_hash, s.start_line, s.end_line, s.parent_id
              FROM symbols s {repo_join} WHERE ({})",
             conditions.join(" OR ")
         );
@@ -1403,9 +1598,10 @@ impl Database {
                 kind: row.get(3)?,
                 signature: row.get(4)?,
                 body: row.get(5)?,
-                start_line: row.get(6)?,
-                end_line: row.get(7)?,
-                parent_id: row.get(8)?,
+                body_hash: row.get(6)?,
+                start_line: row.get(7)?,
+                end_line: row.get(8)?,
+                parent_id: row.get(9)?,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()

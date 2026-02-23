@@ -9,7 +9,7 @@ fn test_auto_capture_multiple_sources() {
     let repo_id = db.upsert_repository("r", "/tmp/r").unwrap();
     let file_id = db.upsert_file(repo_id, "f.rs", "rust", "h").unwrap();
     let sym_id = db
-        .insert_symbol(file_id, "func", "function", "fn func()", "", 1, 5, None)
+        .insert_symbol(file_id, "func", "function", "fn func()", "", "", 1, 5, None)
         .unwrap();
 
     // Simulate auto-observations from different tool handlers in the same session
@@ -69,10 +69,10 @@ fn test_auto_capture_symbol_links() {
     let repo_id = db.upsert_repository("r", "/tmp/r").unwrap();
     let file_id = db.upsert_file(repo_id, "f.rs", "rust", "h").unwrap();
     let s1 = db
-        .insert_symbol(file_id, "alpha", "function", "fn alpha()", "", 1, 3, None)
+        .insert_symbol(file_id, "alpha", "function", "fn alpha()", "", "", 1, 3, None)
         .unwrap();
     let s2 = db
-        .insert_symbol(file_id, "beta", "function", "fn beta()", "", 4, 6, None)
+        .insert_symbol(file_id, "beta", "function", "fn beta()", "", "", 4, 6, None)
         .unwrap();
 
     // Auto-observation linked to s1 only

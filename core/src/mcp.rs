@@ -426,6 +426,7 @@ impl FocalServer {
                     start_line: sym.start_line,
                     end_line: sym.end_line,
                     memories,
+                    dependency_hints: Vec::new(),
                 }
             })
             .collect()
@@ -848,7 +849,7 @@ impl FocalServer {
         serde_json::to_string_pretty(&result).map_err(|e| format!("json error: {e}"))
     }
 
-    #[tool(description = "Fetch multiple symbols in a single call within a token budget. More efficient than multiple query_symbol calls when you need several specific symbols.")]
+    #[tool(description = "Fetch multiple symbols in a single call within a token budget. More efficient than multiple query_symbol calls when you need several specific symbols. Includes dependency hints when a symbol implements a trait/interface or imports types not in the result set.")]
     fn batch_query(
         &self,
         Parameters(params): Parameters<BatchQueryParams>,
@@ -880,13 +881,40 @@ impl FocalServer {
 
             // Phase 2: batch-fetch memories for all collected symbols
             let sym_ids: Vec<i64> = out.iter().map(|(s, _)| s.id).collect();
+            let sym_id_set: HashSet<i64> = sym_ids.iter().copied().collect();
             let mut mem_map = db
                 .get_memories_for_symbols_batch(&sym_ids, false)
                 .unwrap_or_default();
 
+            // Phase 3: compute dependency hints — surface unseen interfaces/traits
+            let mut hint_map: std::collections::HashMap<i64, Vec<String>> =
+                std::collections::HashMap::new();
+            for (sym, _) in &out {
+                if let Ok(deps) = db.get_dependency_hint_names(sym.id, &sym_id_set) {
+                    let mut hints = Vec::new();
+                    for (dep_name, dep_kind, edge_kind) in deps {
+                        // Only hint about symbols not already in the batch result
+                        if out.iter().any(|(s, _)| s.name == dep_name) {
+                            continue;
+                        }
+                        let relation = match edge_kind.as_str() {
+                            "type_ref" => format!("References {dep_kind} `{dep_name}` (not in context)"),
+                            "imports" => format!("Imports `{dep_name}` (not in context)"),
+                            "calls" => format!("Calls `{dep_name}` (not in context)"),
+                            _ => format!("Depends on `{dep_name}` (not in context)"),
+                        };
+                        hints.push(relation);
+                    }
+                    if !hints.is_empty() {
+                        hint_map.insert(sym.id, hints);
+                    }
+                }
+            }
+
             out.into_iter()
                 .map(|(sym, file_path)| {
                     let memories = mem_map.remove(&sym.id).unwrap_or_default();
+                    let dependency_hints = hint_map.remove(&sym.id).unwrap_or_default();
                     SymbolResult {
                         id: sym.id,
                         name: sym.name.clone(),
@@ -902,6 +930,7 @@ impl FocalServer {
                         start_line: sym.start_line,
                         end_line: sym.end_line,
                         memories,
+                        dependency_hints,
                     }
                 })
                 .collect::<Vec<_>>()
