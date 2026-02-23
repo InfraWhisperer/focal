@@ -59,16 +59,80 @@ cargo build --release
 
 ### Run standalone (CLI)
 
+The binary works independently — no VS Code extension required. It indexes your workspace on startup, watches for file changes, and serves MCP tools over stdio or HTTP.
+
 ```bash
-# stdio MCP server (default — Claude Code connects via stdin/stdout)
+# stdio MCP server (default — AI clients connect via stdin/stdout)
 focal /path/to/workspace
 
-# HTTP MCP server on port 3100
+# Multiple workspaces in a single index
+focal /path/to/repo1 /path/to/repo2
+
+# HTTP MCP server on port 3100 (persistent daemon mode)
 focal /path/to/workspace --http
 
 # HTTP on custom port
 focal /path/to/workspace --http --port 8080
 ```
+
+**Verbose logging** (logs go to stderr, MCP traffic on stdout):
+```bash
+RUST_LOG=focal=debug focal /path/to/workspace
+```
+
+#### Connecting Claude Code (stdio)
+
+Add to `~/.claude/settings.json`:
+```json
+{
+  "mcpServers": {
+    "focal": {
+      "command": "/path/to/focal",
+      "args": ["/path/to/workspace"]
+    }
+  }
+}
+```
+
+Claude Code spawns the binary automatically on its next session.
+
+#### Connecting VS Code (Copilot, Continue, etc.)
+
+Add to your VS Code `settings.json` (Cmd+Shift+P → "Preferences: Open User Settings (JSON)"):
+
+**stdio mode** (editor spawns the process):
+```json
+{
+  "mcp": {
+    "servers": {
+      "focal": {
+        "type": "stdio",
+        "command": "/path/to/focal",
+        "args": ["/path/to/workspace"]
+      }
+    }
+  }
+}
+```
+
+**HTTP mode** (connect to a running server):
+```bash
+# Start the server first
+focal /path/to/workspace --http --port 3100
+```
+```json
+{
+  "mcp": {
+    "servers": {
+      "focal": {
+        "url": "http://localhost:3100/mcp"
+      }
+    }
+  }
+}
+```
+
+HTTP mode is useful when you want the server to outlive editor restarts, serve multiple clients, or when your org restricts MCP server spawning.
 
 ### Run via VS Code extension
 
