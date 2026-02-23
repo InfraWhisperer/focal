@@ -1,0 +1,7 @@
+target/
+extension/node_modules/
+extension/out/
+*.vsix
+
+.vscode/
+.idea/

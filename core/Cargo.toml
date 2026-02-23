@@ -1,0 +1,58 @@
+[package]
+name = "focal-core"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "focal"
+path = "src/main.rs"
+
+[dependencies]
+# MCP server
+rmcp = { version = "0.16", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
+
+# Tree-sitter
+tree-sitter = "0.26"
+tree-sitter-go = "0.25"
+tree-sitter-rust = "0.24"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.25"
+
+# Database
+rusqlite = { version = "0.38", features = ["bundled-full"] }
+
+# File watching
+notify = "8.2"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+tokio-util = "0.7"
+
+# HTTP server (for --http MCP mode)
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+schemars = "1.0"
+
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Hashing
+sha2 = "0.10"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# Logging
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Misc
+walkdir = "2"
+dirs = "6"
+
+[dev-dependencies]
+tempfile = "3"

@@ -1,0 +1,52 @@
+{
+  "name": "focal",
+  "displayName": "Focal",
+  "description": "Reduce Claude Code token usage with structural code indexing",
+  "version": "0.1.0",
+  "publisher": "rpotluri",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": ["onStartupFinished"],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      { "command": "focal.reindex", "title": "Focal: Reindex Workspace" },
+      { "command": "focal.clearIndex", "title": "Focal: Clear Index" },
+      { "command": "focal.showMemories", "title": "Focal: Show Memories" },
+      { "command": "focal.configureMcp", "title": "Focal: Configure MCP" }
+    ],
+    "configuration": {
+      "title": "Focal",
+      "properties": {
+        "focal.excludePatterns": {
+          "type": "array",
+          "default": ["node_modules", ".git", "vendor", "target", "dist"],
+          "description": "Glob patterns to exclude from indexing"
+        },
+        "focal.maxFileSize": {
+          "type": "number",
+          "default": 500000,
+          "description": "Maximum file size in bytes to index"
+        },
+        "focal.coreBinaryPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to focal binary (auto-detected if empty)"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src --ext ts",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.3.0"
+  }
+}
