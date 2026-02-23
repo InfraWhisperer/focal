@@ -67,11 +67,12 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           path: artifacts
+          merge-multiple: true
 
       - name: Compute checksums
         run: |
           cd artifacts
-          find . -type f -name 'focal-*' -exec mv {} . \;
+          ls -la
           sha256sum focal-* > checksums-sha256.txt
           cat checksums-sha256.txt
 
@@ -80,8 +81,5 @@ jobs:
         with:
           generate_release_notes: true
           files: |
-            artifacts/focal-linux-amd64
-            artifacts/focal-linux-arm64
-            artifacts/focal-darwin-amd64
-            artifacts/focal-darwin-arm64
+            artifacts/focal-*
             artifacts/checksums-sha256.txt
