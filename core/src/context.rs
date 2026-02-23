@@ -184,7 +184,16 @@ impl<'a> ContextEngine<'a> {
         // Strip intent keywords ("fix", "refactor", etc.) so they don't pollute
         // the FTS5 match. The user is describing *what to do*, not *what to find*.
         let fts_query = strip_intent_keywords(query);
-        let mut pivots = self.db.search_code(&fts_query, "", repo_id, 5)?;
+
+        // Apply recency bias for debug intent: recently-changed files are more
+        // likely to contain the bug. Other intents get pure BM25 ranking.
+        let recency_boost = match intent {
+            Intent::Debug => 0.5,
+            _ => 0.0,
+        };
+        let mut pivots = self
+            .db
+            .search_code_with_recency(&fts_query, "", repo_id, 5, recency_boost)?;
 
         // Fallback: if FTS returned < 3 results, try fuzzy name match.
         // FTS5 tokenizes on whitespace/punctuation and misses camelCase

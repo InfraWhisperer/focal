@@ -21,16 +21,16 @@ fn test_impact_graph_linear_chain() {
 
     // Create symbols: A, B, C, D
     let a = db
-        .insert_symbol(file_id, "A", "function", "fn A()", "", 1, 5, None)
+        .insert_symbol(file_id, "A", "function", "fn A()", "", "", 1, 5, None)
         .unwrap();
     let b = db
-        .insert_symbol(file_id, "B", "function", "fn B()", "", 6, 10, None)
+        .insert_symbol(file_id, "B", "function", "fn B()", "", "", 6, 10, None)
         .unwrap();
     let c = db
-        .insert_symbol(file_id, "C", "function", "fn C()", "", 11, 15, None)
+        .insert_symbol(file_id, "C", "function", "fn C()", "", "", 11, 15, None)
         .unwrap();
     let d = db
-        .insert_symbol(file_id, "D", "function", "fn D()", "", 16, 20, None)
+        .insert_symbol(file_id, "D", "function", "fn D()", "", "", 16, 20, None)
         .unwrap();
 
     // Edges: B -> A (B calls/depends on A), C -> B, D -> C
@@ -74,10 +74,10 @@ fn test_impact_graph_cycle() {
     let (db, repo_id, file_id) = setup_db();
 
     let x = db
-        .insert_symbol(file_id, "X", "function", "fn X()", "", 1, 5, None)
+        .insert_symbol(file_id, "X", "function", "fn X()", "", "", 1, 5, None)
         .unwrap();
     let y = db
-        .insert_symbol(file_id, "Y", "function", "fn Y()", "", 6, 10, None)
+        .insert_symbol(file_id, "Y", "function", "fn Y()", "", "", 6, 10, None)
         .unwrap();
 
     // Mutual dependency: X -> Y and Y -> X
@@ -116,16 +116,16 @@ fn test_logic_flow_linear_path() {
     let (db, repo_id, file_id) = setup_db();
 
     let main_sym = db
-        .insert_symbol(file_id, "main", "function", "fn main()", "", 1, 5, None)
+        .insert_symbol(file_id, "main", "function", "fn main()", "", "", 1, 5, None)
         .unwrap();
     let handle = db
-        .insert_symbol(file_id, "HandleRequest", "function", "fn HandleRequest()", "", 6, 10, None)
+        .insert_symbol(file_id, "HandleRequest", "function", "fn HandleRequest()", "", "", 6, 10, None)
         .unwrap();
     let process = db
-        .insert_symbol(file_id, "Process", "function", "fn Process()", "", 11, 15, None)
+        .insert_symbol(file_id, "Process", "function", "fn Process()", "", "", 11, 15, None)
         .unwrap();
     let save = db
-        .insert_symbol(file_id, "SaveToDB", "function", "fn SaveToDB()", "", 16, 20, None)
+        .insert_symbol(file_id, "SaveToDB", "function", "fn SaveToDB()", "", "", 16, 20, None)
         .unwrap();
 
     // Forward edges: main -> HandleRequest -> Process -> SaveToDB
@@ -151,16 +151,16 @@ fn test_logic_flow_multiple_paths() {
     let (db, repo_id, file_id) = setup_db();
 
     let start = db
-        .insert_symbol(file_id, "Start", "function", "fn Start()", "", 1, 5, None)
+        .insert_symbol(file_id, "Start", "function", "fn Start()", "", "", 1, 5, None)
         .unwrap();
     let mid_a = db
-        .insert_symbol(file_id, "MidA", "function", "fn MidA()", "", 6, 10, None)
+        .insert_symbol(file_id, "MidA", "function", "fn MidA()", "", "", 6, 10, None)
         .unwrap();
     let mid_b = db
-        .insert_symbol(file_id, "MidB", "function", "fn MidB()", "", 11, 15, None)
+        .insert_symbol(file_id, "MidB", "function", "fn MidB()", "", "", 11, 15, None)
         .unwrap();
     let end = db
-        .insert_symbol(file_id, "End", "function", "fn End()", "", 16, 20, None)
+        .insert_symbol(file_id, "End", "function", "fn End()", "", "", 16, 20, None)
         .unwrap();
 
     // Two paths: Start -> MidA -> End, Start -> MidB -> End
@@ -196,9 +196,9 @@ fn test_logic_flow_multiple_paths() {
 fn test_logic_flow_no_path() {
     let (db, repo_id, file_id) = setup_db();
 
-    db.insert_symbol(file_id, "Isolated1", "function", "fn Isolated1()", "", 1, 5, None)
+    db.insert_symbol(file_id, "Isolated1", "function", "fn Isolated1()", "", "", 1, 5, None)
         .unwrap();
-    db.insert_symbol(file_id, "Isolated2", "function", "fn Isolated2()", "", 6, 10, None)
+    db.insert_symbol(file_id, "Isolated2", "function", "fn Isolated2()", "", "", 6, 10, None)
         .unwrap();
     // No edges between them
 
@@ -217,7 +217,7 @@ fn test_logic_flow_no_path() {
 fn test_logic_flow_same_symbol() {
     let (db, repo_id, file_id) = setup_db();
 
-    db.insert_symbol(file_id, "SelfRef", "function", "fn SelfRef()", "", 1, 5, None)
+    db.insert_symbol(file_id, "SelfRef", "function", "fn SelfRef()", "", "", 1, 5, None)
         .unwrap();
 
     let engine = GraphEngine::new(&db);
