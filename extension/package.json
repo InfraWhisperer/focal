@@ -2,7 +2,7 @@
   "name": "focal",
   "displayName": "Focal",
   "description": "Reduce Claude Code token usage with structural code indexing",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "rpotluri",
   "engines": {
     "vscode": "^1.85.0"
