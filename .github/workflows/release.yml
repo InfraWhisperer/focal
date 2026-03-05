@@ -46,6 +46,7 @@ jobs:
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
       - name: Set version from tag
+        shell: bash
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           sed -i.bak "s/^version = \".*\"/version = \"$VERSION\"/" core/Cargo.toml
