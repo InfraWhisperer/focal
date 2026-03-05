@@ -4,7 +4,7 @@
 
 [![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![GitHub Release](https://img.shields.io/github/v/release/InfraWhisperer/focal)](https://github.com/InfraWhisperer/focal/releases)
-[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/rpotluri.focal)](https://marketplace.visualstudio.com/items?itemName=rpotluri.focal)
+[![VS Code Marketplace](https://img.shields.io/visual-studio-marketplace/v/rpotluri.focal)](https://marketplace.visualstudio.com/items?itemName=rpotluri.focal-code)
 
 Focal is an MCP server that gives Claude Code structural awareness of your codebase — symbols, dependencies, blast radius — so it retrieves exactly the context it needs instead of re-reading entire files every session.
 
