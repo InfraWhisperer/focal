@@ -1,5 +1,6 @@
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -312,6 +313,7 @@ pub struct FocalServer {
     db: Arc<Mutex<Database>>,
     #[allow(dead_code)]
     workspace_roots: Vec<PathBuf>,
+    indexing_complete: Arc<AtomicBool>,
     session_id: String,
     /// Symbol IDs whose full bodies have already been sent in this session.
     /// On subsequent requests, these symbols get skeleton + placeholder note
@@ -321,7 +323,11 @@ pub struct FocalServer {
 }
 
 impl FocalServer {
-    pub fn new(db: Arc<Mutex<Database>>, workspace_roots: Vec<PathBuf>) -> Self {
+    pub fn new(
+        db: Arc<Mutex<Database>>,
+        workspace_roots: Vec<PathBuf>,
+        indexing_complete: Arc<AtomicBool>,
+    ) -> Self {
         let session_id = format!(
             "session-{}",
             std::time::SystemTime::now()
@@ -332,6 +338,7 @@ impl FocalServer {
         Self {
             db,
             workspace_roots,
+            indexing_complete,
             session_id,
             sent_symbols: Arc::new(Mutex::new(HashSet::new())),
             tool_router: Self::tool_router(),
@@ -954,7 +961,11 @@ impl FocalServer {
             db.get_health()
                 .map_err(|e| format!("health check error: {e}"))?
         };
-        serde_json::to_string_pretty(&report).map_err(|e| format!("json error: {e}"))
+        let mut value = serde_json::to_value(&report).map_err(|e| format!("json error: {e}"))?;
+        value["indexing_complete"] = serde_json::Value::Bool(
+            self.indexing_complete.load(Ordering::Relaxed),
+        );
+        serde_json::to_string_pretty(&value).map_err(|e| format!("json error: {e}"))
     }
 
     #[tool(description = "Get git commit history for a specific symbol's file. Shows who last changed it and why. Requires git to be available in PATH.")]

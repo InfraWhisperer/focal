@@ -4,25 +4,52 @@
   "description": "Reduce Claude Code token usage with structural code indexing",
   "version": "0.2.0",
   "publisher": "rpotluri",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/InfraWhisperer/focal"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other"],
-  "activationEvents": ["onStartupFinished"],
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "main": "./out/extension.js",
   "contributes": {
     "commands": [
-      { "command": "focal.reindex", "title": "Focal: Reindex Workspace" },
-      { "command": "focal.clearIndex", "title": "Focal: Clear Index" },
-      { "command": "focal.showMemories", "title": "Focal: Show Memories" },
-      { "command": "focal.configureMcp", "title": "Focal: Configure MCP" }
+      {
+        "command": "focal.reindex",
+        "title": "Focal: Reindex Workspace"
+      },
+      {
+        "command": "focal.clearIndex",
+        "title": "Focal: Clear Index"
+      },
+      {
+        "command": "focal.showMemories",
+        "title": "Focal: Show Memories"
+      },
+      {
+        "command": "focal.configureMcp",
+        "title": "Focal: Configure MCP"
+      }
     ],
     "configuration": {
       "title": "Focal",
       "properties": {
         "focal.excludePatterns": {
           "type": "array",
-          "default": ["node_modules", ".git", "vendor", "target", "dist"],
+          "default": [
+            "node_modules",
+            ".git",
+            "vendor",
+            "target",
+            "dist"
+          ],
           "description": "Glob patterns to exclude from indexing"
         },
         "focal.maxFileSize": {
@@ -41,12 +68,21 @@
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile",
+    "test": "vscode-test",
     "lint": "eslint src --ext ts",
-    "package": "vsce package"
+    "package": "vsce package",
+    "vscode:prepublish": "npm run compile",
+    "deploy": "vsce publish"
   },
   "devDependencies": {
+    "@types/mocha": "^10.0.10",
     "@types/node": "^20.0.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^3.7.1",
+    "mocha": "^11.7.5",
     "typescript": "^5.3.0"
   }
 }

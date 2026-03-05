@@ -1,10 +1,10 @@
 import * as vscode from "vscode";
-import * as fs from "fs";
-import * as path from "path";
-import * as os from "os";
 import { StatusBarManager } from "./statusbar";
 import { registerCommands } from "./commands";
 import { autoConfigureMcp } from "./mcp-config";
+import { resolveBinary } from "./binary-manager";
+
+const RELEASES_URL = "https://github.com/InfraWhisperer/focal/releases/latest";
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const statusBar = new StatusBarManager();
@@ -16,7 +16,29 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     return;
   }
   const workspaceRoots = folders.map((f) => f.uri.fsPath);
-  const binaryPath = resolveBinaryPath(context.extensionPath);
+
+  // Resolve binary with auto-download fallback
+  statusBar.setDownloading();
+  const binaryPath = await resolveBinary(context.extensionPath);
+
+  // Validate the resolved binary exists before writing MCP config
+  if (!binaryPath) {
+    statusBar.setError("binary not found");
+    const choice = await vscode.window.showErrorMessage(
+      "Focal: could not find or download the focal binary.",
+      "Download from GitHub",
+      "Set Path"
+    );
+    if (choice === "Download from GitHub") {
+      vscode.env.openExternal(vscode.Uri.parse(RELEASES_URL));
+    } else if (choice === "Set Path") {
+      vscode.commands.executeCommand(
+        "workbench.action.openSettings",
+        "focal.coreBinaryPath"
+      );
+    }
+    return;
+  }
 
   // Register commands (reindex triggers via MCP, clearIndex deletes DB)
   registerCommands(context, binaryPath, workspaceRoots, statusBar);
@@ -29,30 +51,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     );
   });
 
-  statusBar.setReady();
+  statusBar.setConnected();
 }
 
 export function deactivate(): void {}
-
-/**
- * Resolve the focal binary path using platform-aware detection:
- * 1. User-configured path (focal.coreBinaryPath)
- * 2. Platform-specific bundled binary (extension/bin/focal or focal.exe)
- * 3. Fall back to PATH lookup
- */
-function resolveBinaryPath(extensionPath: string): string {
-  const configured = vscode.workspace
-    .getConfiguration("focal")
-    .get<string>("coreBinaryPath", "");
-  if (configured && fs.existsSync(configured)) {
-    return configured;
-  }
-
-  const binaryName = os.platform() === "win32" ? "focal.exe" : "focal";
-  const bundled = path.join(extensionPath, "bin", binaryName);
-  if (fs.existsSync(bundled)) {
-    return bundled;
-  }
-
-  return "focal";
-}

@@ -1,7 +1,11 @@
 target/
 extension/node_modules/
 extension/out/
+extension/.vscode-test/
+extension/bin/
 *.vsix
 
 .vscode/
 .idea/
+.mcp.json
+docs/plans/

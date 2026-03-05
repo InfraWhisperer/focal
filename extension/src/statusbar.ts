@@ -50,6 +50,16 @@ export class StatusBarManager {
     this.item.tooltip = `Focal error: ${msg}`;
   }
 
+  setConnected(): void {
+    this.item.text = "$(check) Focal: Ready";
+    this.item.tooltip = "Focal: connected and ready";
+  }
+
+  setDownloading(): void {
+    this.item.text = "$(sync~spin) Focal: Downloading...";
+    this.item.tooltip = "Focal: downloading binary from GitHub";
+  }
+
   dispose(): void {
     this.item.dispose();
   }
