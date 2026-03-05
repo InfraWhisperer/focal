@@ -9,3 +9,4 @@ extension/bin/
 .idea/
 .mcp.json
 docs/plans/
+.worktrees/
