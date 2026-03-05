@@ -3,12 +3,12 @@ import * as vscode from "vscode";
 
 suite("Extension", () => {
   test("extension is present", () => {
-    const ext = vscode.extensions.getExtension("rpotluri.focal");
+    const ext = vscode.extensions.getExtension("rpotluri.focal-code");
     assert.ok(ext, "focal extension should be registered");
   });
 
   test("extension activates on startup", async () => {
-    const ext = vscode.extensions.getExtension("rpotluri.focal");
+    const ext = vscode.extensions.getExtension("rpotluri.focal-code");
     if (ext && !ext.isActive) {
       await ext.activate();
     }
@@ -17,7 +17,7 @@ suite("Extension", () => {
   });
 
   test("commands are declared in package.json", async () => {
-    const ext = vscode.extensions.getExtension("rpotluri.focal");
+    const ext = vscode.extensions.getExtension("rpotluri.focal-code");
     assert.ok(ext, "extension should exist");
     const commands: Array<{ command: string }> =
       ext!.packageJSON.contributes?.commands ?? [];

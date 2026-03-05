@@ -1,5 +1,5 @@
 {
-  "name": "focal",
+  "name": "focal-code",
   "displayName": "Focal",
   "description": "Reduce Claude Code token usage with structural code indexing",
   "version": "0.2.0",
