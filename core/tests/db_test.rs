@@ -96,6 +96,7 @@ fn test_file_and_symbol_crud() {
         .insert_symbol(
             file_id,
             "main",
+            "",
             "function",
             "fn main()",
             "fn main() { println!(\"hello\"); }",
@@ -145,10 +146,10 @@ fn test_edge_crud() {
     let file_id = db.upsert_file(repo_id, "lib.rs", "rust", "h1").unwrap();
 
     let s1 = db
-        .insert_symbol(file_id, "foo", "function", "fn foo()", "", "", 1, 5, None)
+        .insert_symbol(file_id, "foo", "", "function", "fn foo()", "", "", 1, 5, None)
         .unwrap();
     let s2 = db
-        .insert_symbol(file_id, "bar", "function", "fn bar()", "", "", 6, 10, None)
+        .insert_symbol(file_id, "bar", "", "function", "fn bar()", "", "", 6, 10, None)
         .unwrap();
 
     let edge_id = db.insert_edge(s1, s2, "calls").unwrap();
@@ -180,7 +181,7 @@ fn test_memory_crud() {
     let repo_id = db.upsert_repository("r", "/tmp/r").unwrap();
     let file_id = db.upsert_file(repo_id, "f.rs", "rust", "h").unwrap();
     let sym_id = db
-        .insert_symbol(file_id, "func", "function", "", "", "", 1, 1, None)
+        .insert_symbol(file_id, "func", "", "function", "", "", "", 1, 1, None)
         .unwrap();
 
     // Save memory linked to a symbol
@@ -228,7 +229,7 @@ fn test_memory_staleness() {
     let repo_id = db.upsert_repository("r", "/tmp/r").unwrap();
     let file_id = db.upsert_file(repo_id, "f.rs", "rust", "h").unwrap();
     let sym_id = db
-        .insert_symbol(file_id, "func", "function", "", "", "", 1, 1, None)
+        .insert_symbol(file_id, "func", "", "function", "", "", "", 1, 1, None)
         .unwrap();
 
     let mem_id = db
@@ -273,6 +274,7 @@ fn test_fts_search() {
     db.insert_symbol(
         file_id,
         "calculate_total",
+        "",
         "function",
         "fn calculate_total(items: &[Item]) -> f64",
         "fn calculate_total(items: &[Item]) -> f64 { items.iter().map(|i| i.price).sum() }",
@@ -286,6 +288,7 @@ fn test_fts_search() {
     db.insert_symbol(
         file_id,
         "parse_config",
+        "",
         "function",
         "fn parse_config(path: &str) -> Config",
         "fn parse_config(path: &str) -> Config { toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap() }",
@@ -339,7 +342,7 @@ fn test_auto_observation() {
     let repo_id = db.upsert_repository("r", "/tmp/r").unwrap();
     let file_id = db.upsert_file(repo_id, "f.rs", "rust", "h").unwrap();
     let sym_id = db
-        .insert_symbol(file_id, "func", "function", "", "", "", 1, 1, None)
+        .insert_symbol(file_id, "func", "", "function", "", "", "", 1, 1, None)
         .unwrap();
 
     let mem_id = db
@@ -386,7 +389,7 @@ fn test_cleanup_old_observations() {
     let repo_id = db.upsert_repository("r", "/tmp/r").unwrap();
     let file_id = db.upsert_file(repo_id, "f.rs", "rust", "h").unwrap();
     let sym_id = db
-        .insert_symbol(file_id, "func", "function", "", "", "", 1, 1, None)
+        .insert_symbol(file_id, "func", "", "function", "", "", "", 1, 1, None)
         .unwrap();
 
     // Insert an old auto-observation by manually setting created_at in the past
@@ -435,7 +438,7 @@ fn test_cleanup_old_observations() {
     let repo_id = db.upsert_repository("r", "/tmp/r").unwrap();
     let file_id = db.upsert_file(repo_id, "f.rs", "rust", "h").unwrap();
     let sym_id = db
-        .insert_symbol(file_id, "func", "function", "", "", "", 1, 1, None)
+        .insert_symbol(file_id, "func", "", "function", "", "", "", 1, 1, None)
         .unwrap();
 
     let auto_id = db
@@ -477,6 +480,7 @@ fn test_incremental_fts() {
         .insert_symbol(
             file_id,
             "HandleRequest",
+            "",
             "function",
             "func HandleRequest()",
             "func HandleRequest() {}",
@@ -505,10 +509,10 @@ fn test_duplicate_edge_ignored() {
     let repo_id = db.upsert_repository("test", "/test").unwrap();
     let file_id = db.upsert_file(repo_id, "a.go", "go", "hash").unwrap();
     let s1 = db
-        .insert_symbol(file_id, "A", "function", "fn A()", "", "", 1, 5, None)
+        .insert_symbol(file_id, "A", "", "function", "fn A()", "", "", 1, 5, None)
         .unwrap();
     let s2 = db
-        .insert_symbol(file_id, "B", "function", "fn B()", "", "", 6, 10, None)
+        .insert_symbol(file_id, "B", "", "function", "fn B()", "", "", 6, 10, None)
         .unwrap();
 
     let e1 = db.insert_edge(s1, s2, "calls").unwrap();
@@ -531,7 +535,7 @@ fn test_search_memories() {
     let repo_id = db.upsert_repository("test", "/test").unwrap();
     let file_id = db.upsert_file(repo_id, "a.go", "go", "hash").unwrap();
     let sym_id = db
-        .insert_symbol(file_id, "Foo", "function", "fn Foo()", "", "", 1, 5, None)
+        .insert_symbol(file_id, "Foo", "", "function", "fn Foo()", "", "", 1, 5, None)
         .unwrap();
 
     db.save_memory(
@@ -565,7 +569,7 @@ fn test_session_recovery_basic() {
     let repo_id = db.upsert_repository("r", "/tmp/r").unwrap();
     let file_id = db.upsert_file(repo_id, "src/main.rs", "rust", "h").unwrap();
     let sym_id = db
-        .insert_symbol(file_id, "handle_request", "function", "fn handle_request()", "", "", 1, 10, None)
+        .insert_symbol(file_id, "handle_request", "", "function", "fn handle_request()", "", "", 1, 10, None)
         .unwrap();
 
     // Manual memory (cross-session, source='manual')
@@ -640,10 +644,10 @@ fn test_session_recovery_session_isolation() {
     let repo_id = db.upsert_repository("r", "/tmp/r").unwrap();
     let file_id = db.upsert_file(repo_id, "a.rs", "rust", "h").unwrap();
     let sym_a = db
-        .insert_symbol(file_id, "alpha", "function", "fn alpha()", "", "", 1, 5, None)
+        .insert_symbol(file_id, "alpha", "", "function", "fn alpha()", "", "", 1, 5, None)
         .unwrap();
     let sym_b = db
-        .insert_symbol(file_id, "beta", "function", "fn beta()", "", "", 6, 10, None)
+        .insert_symbol(file_id, "beta", "", "function", "fn beta()", "", "", 6, 10, None)
         .unwrap();
 
     // Session 1 touches alpha
@@ -674,7 +678,7 @@ fn test_session_recovery_stale_excluded() {
     let repo_id = db.upsert_repository("r", "/tmp/r").unwrap();
     let file_id = db.upsert_file(repo_id, "f.rs", "rust", "h").unwrap();
     let sym_id = db
-        .insert_symbol(file_id, "stale_fn", "function", "fn stale_fn()", "", "", 1, 5, None)
+        .insert_symbol(file_id, "stale_fn", "", "function", "fn stale_fn()", "", "", 1, 5, None)
         .unwrap();
 
     db.save_auto_observation("Explored stale_fn", "auto:query_symbol", "session-x", &[sym_id])
@@ -697,10 +701,10 @@ fn test_session_recovery_file_dedup() {
     let repo_id = db.upsert_repository("r", "/tmp/r").unwrap();
     let file_id = db.upsert_file(repo_id, "src/lib.rs", "rust", "h").unwrap();
     let sym_1 = db
-        .insert_symbol(file_id, "foo", "function", "fn foo()", "", "", 1, 5, None)
+        .insert_symbol(file_id, "foo", "", "function", "fn foo()", "", "", 1, 5, None)
         .unwrap();
     let sym_2 = db
-        .insert_symbol(file_id, "bar", "function", "fn bar()", "", "", 6, 10, None)
+        .insert_symbol(file_id, "bar", "", "function", "fn bar()", "", "", 6, 10, None)
         .unwrap();
 
     // Two different observations linking to different symbols in the SAME file

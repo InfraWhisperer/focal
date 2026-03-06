@@ -434,9 +434,25 @@ impl FocalServer {
                     end_line: sym.end_line,
                     memories,
                     dependency_hints: Vec::new(),
+                    source: sym.source.clone(),
+                    manifest_repo: sym.manifest_repo.clone(),
                 }
             })
             .collect()
+    }
+
+    /// Replace the body of manifest-imported symbols with an informational message.
+    /// Called at the presentation layer before serialization — keeps DB queries and
+    /// graph traversal unaware of manifest provenance.
+    fn annotate_manifest_bodies(results: &mut [SymbolResult]) {
+        for r in results.iter_mut() {
+            if r.source == "manifest" {
+                r.body = format!(
+                    "[Source body not available — imported from manifest: {}. Clone the repo for full source.]",
+                    r.manifest_repo.as_deref().unwrap_or("unknown")
+                );
+            }
+        }
     }
 }
 
@@ -456,7 +472,7 @@ impl FocalServer {
         &self,
         Parameters(params): Parameters<QuerySymbolParams>,
     ) -> Result<String, String> {
-        let results = {
+        let mut results = {
             let db = self.db.lock().map_err(|e| format!("lock error: {e}"))?;
             let name = params.name.as_str();
             let kind = params.kind.as_deref().unwrap_or("");
@@ -478,6 +494,8 @@ impl FocalServer {
 
             results
         };
+
+        Self::annotate_manifest_bodies(&mut results);
 
         // Record symbol IDs as sent (full bodies were included)
         if let Ok(mut sent) = self.sent_symbols.lock() {
@@ -651,7 +669,7 @@ impl FocalServer {
         &self,
         Parameters(params): Parameters<SearchCodeParams>,
     ) -> Result<String, String> {
-        let results = {
+        let mut results = {
             let db = self.db.lock().map_err(|e| format!("lock error: {e}"))?;
             let kind = params.kind.as_deref().unwrap_or("");
             let max_results = params.max_results.unwrap_or(20);
@@ -682,6 +700,8 @@ impl FocalServer {
 
             results
         };
+
+        Self::annotate_manifest_bodies(&mut results);
 
         // Record symbol IDs as sent (full bodies were included)
         if let Ok(mut sent) = self.sent_symbols.lock() {
@@ -861,7 +881,7 @@ impl FocalServer {
         &self,
         Parameters(params): Parameters<BatchQueryParams>,
     ) -> Result<String, String> {
-        let results = {
+        let mut results = {
             let db = self.db.lock().map_err(|e| format!("lock error: {e}"))?;
             let include_body = params.include_body.unwrap_or(true);
             let budget = params.max_tokens.unwrap_or(8000);
@@ -938,10 +958,15 @@ impl FocalServer {
                         end_line: sym.end_line,
                         memories,
                         dependency_hints,
+                        source: sym.source.clone(),
+                        manifest_repo: sym.manifest_repo.clone(),
                     }
                 })
                 .collect::<Vec<_>>()
         };
+
+        Self::annotate_manifest_bodies(&mut results);
+
         // Track sent symbols for progressive disclosure
         if let Ok(mut sent) = self.sent_symbols.lock() {
             for r in &results {

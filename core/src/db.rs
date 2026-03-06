@@ -29,6 +29,7 @@ pub struct Symbol {
     pub id: i64,
     pub file_id: i64,
     pub name: String,
+    pub qualified_name: String,
     pub kind: String,
     pub signature: String,
     pub body: String,
@@ -36,6 +37,8 @@ pub struct Symbol {
     pub start_line: i64,
     pub end_line: i64,
     pub parent_id: Option<i64>,
+    pub source: String,
+    pub manifest_repo: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -75,6 +78,8 @@ pub struct SymbolResult {
     /// Hints about unseen dependencies (e.g. "Implements trait Foo (not in context)")
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub dependency_hints: Vec<String>,
+    pub source: String,
+    pub manifest_repo: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -297,6 +302,38 @@ impl Database {
             )?;
         }
 
+        // v0.3.0: manifest support columns
+        let has_qualified_name: bool = self
+            .conn
+            .prepare("SELECT qualified_name FROM symbols LIMIT 0")
+            .is_ok();
+        if !has_qualified_name {
+            self.conn.execute_batch(
+                "ALTER TABLE symbols ADD COLUMN qualified_name TEXT NOT NULL DEFAULT '';
+                 ALTER TABLE symbols ADD COLUMN source TEXT NOT NULL DEFAULT 'local';
+                 ALTER TABLE symbols ADD COLUMN manifest_repo TEXT;
+                 ALTER TABLE symbols ADD COLUMN manifest_imported_at TEXT;"
+            )?;
+        }
+        self.conn.execute_batch(
+            "CREATE INDEX IF NOT EXISTS idx_symbols_manifest_repo ON symbols(manifest_repo);
+             CREATE INDEX IF NOT EXISTS idx_symbols_qualified_name ON symbols(qualified_name);"
+        )?;
+
+        // v0.3.0: manifests metadata table
+        self.conn.execute_batch(
+            "CREATE TABLE IF NOT EXISTS manifests (
+                id             INTEGER PRIMARY KEY,
+                repo           TEXT NOT NULL UNIQUE,
+                version        INTEGER NOT NULL,
+                focal_version  TEXT,
+                exported_at    TEXT,
+                imported_at    TEXT NOT NULL,
+                symbol_count   INTEGER,
+                edge_count     INTEGER
+            );"
+        )?;
+
         Ok(())
     }
 
@@ -481,6 +518,7 @@ impl Database {
         &self,
         file_id: i64,
         name: &str,
+        qualified_name: &str,
         kind: &str,
         signature: &str,
         body: &str,
@@ -490,9 +528,9 @@ impl Database {
         parent_id: Option<i64>,
     ) -> Result<i64> {
         self.conn.execute(
-            "INSERT INTO symbols (file_id, name, kind, signature, body, body_hash, start_line, end_line, parent_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-            params![file_id, name, kind, signature, body, body_hash, start_line, end_line, parent_id],
+            "INSERT INTO symbols (file_id, name, qualified_name, kind, signature, body, body_hash, start_line, end_line, parent_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            params![file_id, name, qualified_name, kind, signature, body, body_hash, start_line, end_line, parent_id],
         )?;
         let id = self.conn.last_insert_rowid();
         // Maintain FTS index incrementally
@@ -505,7 +543,8 @@ impl Database {
 
     pub fn get_symbols_by_file(&self, file_id: i64) -> Result<Vec<Symbol>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, file_id, name, kind, signature, body, body_hash, start_line, end_line, parent_id
+            "SELECT id, file_id, name, kind, signature, body, body_hash,
+                    start_line, end_line, parent_id, qualified_name, source, manifest_repo
              FROM symbols WHERE file_id = ?1 ORDER BY start_line",
         )?;
         let rows = stmt.query_map(params![file_id], |row| {
@@ -513,6 +552,7 @@ impl Database {
                 id: row.get(0)?,
                 file_id: row.get(1)?,
                 name: row.get(2)?,
+                qualified_name: row.get(10)?,
                 kind: row.get(3)?,
                 signature: row.get(4)?,
                 body: row.get(5)?,
@@ -520,6 +560,8 @@ impl Database {
                 start_line: row.get(7)?,
                 end_line: row.get(8)?,
                 parent_id: row.get(9)?,
+                source: row.get(11)?,
+                manifest_repo: row.get(12)?,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -543,7 +585,8 @@ impl Database {
             .conn
             .query_row(
                 "SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.body,
-                        s.body_hash, s.start_line, s.end_line, s.parent_id
+                        s.body_hash, s.start_line, s.end_line, s.parent_id,
+                        s.qualified_name, s.source, s.manifest_repo
                  FROM symbols s
                  JOIN files f ON f.id = s.file_id
                  WHERE f.repo_id = ?1 AND s.name = ?2
@@ -554,6 +597,7 @@ impl Database {
                         id: row.get(0)?,
                         file_id: row.get(1)?,
                         name: row.get(2)?,
+                        qualified_name: row.get(10)?,
                         kind: row.get(3)?,
                         signature: row.get(4)?,
                         body: row.get(5)?,
@@ -561,6 +605,8 @@ impl Database {
                         start_line: row.get(7)?,
                         end_line: row.get(8)?,
                         parent_id: row.get(9)?,
+                        source: row.get(11)?,
+                        manifest_repo: row.get(12)?,
                     })
                 },
             )
@@ -573,7 +619,8 @@ impl Database {
             .conn
             .query_row(
                 "SELECT id, file_id, name, kind, signature, body,
-                        body_hash, start_line, end_line, parent_id
+                        body_hash, start_line, end_line, parent_id,
+                        qualified_name, source, manifest_repo
                  FROM symbols WHERE name = ?1 ORDER BY id LIMIT 1",
                 params![name],
                 |row| {
@@ -581,6 +628,7 @@ impl Database {
                         id: row.get(0)?,
                         file_id: row.get(1)?,
                         name: row.get(2)?,
+                        qualified_name: row.get(10)?,
                         kind: row.get(3)?,
                         signature: row.get(4)?,
                         body: row.get(5)?,
@@ -588,6 +636,8 @@ impl Database {
                         start_line: row.get(7)?,
                         end_line: row.get(8)?,
                         parent_id: row.get(9)?,
+                        source: row.get(11)?,
+                        manifest_repo: row.get(12)?,
                     })
                 },
             )
@@ -602,7 +652,7 @@ impl Database {
         repo_id: i64,
     ) -> Result<std::collections::HashMap<String, i64>> {
         let mut stmt = self.conn.prepare(
-            "SELECT s.id, s.name, s.kind FROM symbols s
+            "SELECT s.id, s.name, s.kind, s.qualified_name FROM symbols s
              JOIN files f ON f.id = s.file_id
              WHERE f.repo_id = ?1
              ORDER BY CASE s.kind
@@ -612,12 +662,16 @@ impl Database {
              END",
         )?;
         let rows = stmt.query_map(params![repo_id], |row| {
-            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(3)?))
         })?;
         let mut map = std::collections::HashMap::new();
         for r in rows {
-            let (id, name) = r?;
+            let (id, name, qname) = r?;
             map.entry(name).or_insert(id); // first wins (function/method preferred)
+            // Also index by qualified_name for cross-repo edge resolution
+            if !qname.is_empty() {
+                map.entry(qname).or_insert(id);
+            }
         }
         // Add unqualified aliases for qualified names (e.g., "Config::new" → "new").
         // Only insert if no existing entry — standalone symbols take priority.
@@ -643,7 +697,7 @@ impl Database {
     ) -> Result<Vec<SymbolResult>> {
         let mut sql = String::from(
             "SELECT s.id, s.name, s.kind, s.signature, s.body, s.body_hash,
-                    f.path, r.name, s.start_line, s.end_line
+                    f.path, r.name, s.start_line, s.end_line, s.source, s.manifest_repo
              FROM symbols s
              JOIN files f ON f.id = s.file_id
              JOIN repositories r ON r.id = f.repo_id
@@ -687,6 +741,8 @@ impl Database {
                 end_line: row.get(9)?,
                 memories: Vec::new(), // filled below
                 dependency_hints: Vec::new(), // filled later if requested
+                source: row.get(10)?,
+                manifest_repo: row.get(11)?,
             })
         })?;
 
@@ -722,7 +778,8 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT e.id, e.source_id, e.target_id, e.kind,
                     s.id, s.file_id, s.name, s.kind, s.signature, s.body,
-                    s.body_hash, s.start_line, s.end_line, s.parent_id
+                    s.body_hash, s.start_line, s.end_line, s.parent_id,
+                    s.qualified_name, s.source, s.manifest_repo
              FROM edges e
              JOIN symbols s ON s.id = e.target_id
              WHERE e.source_id = ?1",
@@ -739,6 +796,7 @@ impl Database {
                     id: row.get(4)?,
                     file_id: row.get(5)?,
                     name: row.get(6)?,
+                    qualified_name: row.get(14)?,
                     kind: row.get(7)?,
                     signature: row.get(8)?,
                     body: row.get(9)?,
@@ -746,6 +804,8 @@ impl Database {
                     start_line: row.get(11)?,
                     end_line: row.get(12)?,
                     parent_id: row.get(13)?,
+                    source: row.get(15)?,
+                    manifest_repo: row.get(16)?,
                 },
             ))
         })?;
@@ -758,7 +818,8 @@ impl Database {
         let mut stmt = self.conn.prepare(
             "SELECT e.id, e.source_id, e.target_id, e.kind,
                     s.id, s.file_id, s.name, s.kind, s.signature, s.body,
-                    s.body_hash, s.start_line, s.end_line, s.parent_id
+                    s.body_hash, s.start_line, s.end_line, s.parent_id,
+                    s.qualified_name, s.source, s.manifest_repo
              FROM edges e
              JOIN symbols s ON s.id = e.source_id
              WHERE e.target_id = ?1",
@@ -775,6 +836,7 @@ impl Database {
                     id: row.get(4)?,
                     file_id: row.get(5)?,
                     name: row.get(6)?,
+                    qualified_name: row.get(14)?,
                     kind: row.get(7)?,
                     signature: row.get(8)?,
                     body: row.get(9)?,
@@ -782,6 +844,8 @@ impl Database {
                     start_line: row.get(11)?,
                     end_line: row.get(12)?,
                     parent_id: row.get(13)?,
+                    source: row.get(15)?,
+                    manifest_repo: row.get(16)?,
                 },
             ))
         })?;
@@ -1402,7 +1466,8 @@ impl Database {
 
         let mut sql = String::from(
             "SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.body,
-                    s.body_hash, s.start_line, s.end_line, s.parent_id
+                    s.body_hash, s.start_line, s.end_line, s.parent_id,
+                    s.qualified_name, s.source, s.manifest_repo
              FROM symbols_fts fts
              JOIN symbols s ON s.id = fts.rowid",
         );
@@ -1448,6 +1513,7 @@ impl Database {
                 id: row.get(0)?,
                 file_id: row.get(1)?,
                 name: row.get(2)?,
+                qualified_name: row.get(10)?,
                 kind: row.get(3)?,
                 signature: row.get(4)?,
                 body: row.get(5)?,
@@ -1455,6 +1521,8 @@ impl Database {
                 start_line: row.get(7)?,
                 end_line: row.get(8)?,
                 parent_id: row.get(9)?,
+                source: row.get(11)?,
+                manifest_repo: row.get(12)?,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -1487,7 +1555,8 @@ impl Database {
         // file indexed_at. Files touched within 48h get up to (1 + recency_boost)
         // multiplier; older files get 1.0 (no penalty).
         let mut sql = "SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.body,
-                    s.body_hash, s.start_line, s.end_line, s.parent_id
+                    s.body_hash, s.start_line, s.end_line, s.parent_id,
+                    s.qualified_name, s.source, s.manifest_repo
              FROM symbols_fts fts
              JOIN symbols s ON s.id = fts.rowid
              JOIN files f ON f.id = s.file_id".to_string();
@@ -1534,6 +1603,7 @@ impl Database {
                 id: row.get(0)?,
                 file_id: row.get(1)?,
                 name: row.get(2)?,
+                qualified_name: row.get(10)?,
                 kind: row.get(3)?,
                 signature: row.get(4)?,
                 body: row.get(5)?,
@@ -1541,6 +1611,8 @@ impl Database {
                 start_line: row.get(7)?,
                 end_line: row.get(8)?,
                 parent_id: row.get(9)?,
+                source: row.get(11)?,
+                manifest_repo: row.get(12)?,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -1575,7 +1647,8 @@ impl Database {
         };
         let mut sql = format!(
             "SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.body,
-                    s.body_hash, s.start_line, s.end_line, s.parent_id
+                    s.body_hash, s.start_line, s.end_line, s.parent_id,
+                    s.qualified_name, s.source, s.manifest_repo
              FROM symbols s {repo_join} WHERE ({})",
             conditions.join(" OR ")
         );
@@ -1595,6 +1668,7 @@ impl Database {
                 id: row.get(0)?,
                 file_id: row.get(1)?,
                 name: row.get(2)?,
+                qualified_name: row.get(10)?,
                 kind: row.get(3)?,
                 signature: row.get(4)?,
                 body: row.get(5)?,
@@ -1602,6 +1676,8 @@ impl Database {
                 start_line: row.get(7)?,
                 end_line: row.get(8)?,
                 parent_id: row.get(9)?,
+                source: row.get(11)?,
+                manifest_repo: row.get(12)?,
             })
         })?;
         rows.collect::<std::result::Result<Vec<_>, _>>()
@@ -1830,6 +1906,168 @@ impl Database {
             Some(id) => self.get_skeleton(id, detail),
             None => Ok(Vec::new()),
         }
+    }
+
+    /// Export all local symbols for a repo with their file path and language.
+    pub fn export_symbols_for_repo(&self, repo_id: i64) -> Result<Vec<(Symbol, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT s.id, s.file_id, s.name, s.kind, s.signature, s.body,
+                    s.body_hash, s.start_line, s.end_line, s.parent_id,
+                    s.qualified_name, s.source, s.manifest_repo,
+                    f.path, f.language
+             FROM symbols s
+             JOIN files f ON f.id = s.file_id
+             WHERE f.repo_id = ?1 AND s.source = 'local'
+             ORDER BY f.path, s.start_line",
+        )?;
+        let rows = stmt.query_map(params![repo_id], |row| {
+            Ok((
+                Symbol {
+                    id: row.get(0)?,
+                    file_id: row.get(1)?,
+                    name: row.get(2)?,
+                    kind: row.get(3)?,
+                    signature: row.get(4)?,
+                    body: row.get(5)?,
+                    body_hash: row.get(6)?,
+                    start_line: row.get(7)?,
+                    end_line: row.get(8)?,
+                    parent_id: row.get(9)?,
+                    qualified_name: row.get(10)?,
+                    source: row.get(11)?,
+                    manifest_repo: row.get(12)?,
+                },
+                row.get::<_, String>(13)?, // file path
+                row.get::<_, String>(14)?, // language
+            ))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    /// Export all edges for a repo as (source_qualified_name, target_qualified_name, kind).
+    pub fn export_edges_for_repo(&self, repo_id: i64) -> Result<Vec<(String, String, String)>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT src.qualified_name, tgt.qualified_name, e.kind
+             FROM edges e
+             JOIN symbols src ON src.id = e.source_id
+             JOIN symbols tgt ON tgt.id = e.target_id
+             JOIN files f ON f.id = src.file_id
+             WHERE f.repo_id = ?1 AND src.source = 'local'",
+        )?;
+        let rows = stmt.query_map(params![repo_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        rows.collect::<std::result::Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    // -----------------------------------------------------------------------
+    // Manifest import
+    // -----------------------------------------------------------------------
+
+    /// Delete all previously-imported symbols and edges for a given manifest repo.
+    pub fn delete_manifest_symbols(&self, manifest_repo: &str) -> Result<usize> {
+        // Delete edges where either endpoint is from this manifest
+        self.conn.execute(
+            "DELETE FROM edges WHERE source_id IN (
+                SELECT id FROM symbols WHERE manifest_repo = ?1
+            ) OR target_id IN (
+                SELECT id FROM symbols WHERE manifest_repo = ?1
+            )",
+            params![manifest_repo],
+        )?;
+        // Delete FTS entries
+        self.conn.execute(
+            "DELETE FROM symbols_fts WHERE rowid IN (
+                SELECT id FROM symbols WHERE manifest_repo = ?1
+            )",
+            params![manifest_repo],
+        )?;
+        // Delete symbols
+        let count = self.conn.execute(
+            "DELETE FROM symbols WHERE manifest_repo = ?1",
+            params![manifest_repo],
+        )?;
+        Ok(count)
+    }
+
+    /// Insert a manifest symbol (no body). Returns the new symbol ID.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_manifest_symbol(
+        &self,
+        file_id: i64,
+        name: &str,
+        qualified_name: &str,
+        kind: &str,
+        signature: &str,
+        start_line: i64,
+        end_line: i64,
+        manifest_repo: &str,
+    ) -> Result<i64> {
+        self.conn.execute(
+            "INSERT INTO symbols (file_id, name, qualified_name, kind, signature,
+                                  body, body_hash, start_line, end_line,
+                                  source, manifest_repo, manifest_imported_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, '', '', ?6, ?7, 'manifest', ?8, datetime('now'))",
+            params![file_id, name, qualified_name, kind, signature, start_line, end_line, manifest_repo],
+        )?;
+        let id = self.conn.last_insert_rowid();
+        // Add to FTS (name + signature, empty body)
+        self.conn.execute(
+            "INSERT INTO symbols_fts(rowid, name, signature, body) VALUES (?1, ?2, ?3, '')",
+            params![id, name, signature],
+        )?;
+        Ok(id)
+    }
+
+    /// Check if a locally-indexed symbol with the given qualified_name exists.
+    pub fn find_symbol_by_qualified_name_local(&self, qualified_name: &str) -> Result<bool> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM symbols WHERE qualified_name = ?1 AND source = 'local'",
+            params![qualified_name],
+            |row| row.get(0),
+        )?;
+        Ok(count > 0)
+    }
+
+    /// Upsert manifest metadata.
+    pub fn upsert_manifest(
+        &self,
+        repo: &str,
+        version: u32,
+        focal_version: &str,
+        exported_at: &str,
+        symbol_count: usize,
+        edge_count: usize,
+    ) -> Result<()> {
+        self.conn.execute(
+            "INSERT INTO manifests (repo, version, focal_version, exported_at, imported_at, symbol_count, edge_count)
+             VALUES (?1, ?2, ?3, ?4, datetime('now'), ?5, ?6)
+             ON CONFLICT(repo) DO UPDATE SET
+                version = excluded.version,
+                focal_version = excluded.focal_version,
+                exported_at = excluded.exported_at,
+                imported_at = excluded.imported_at,
+                symbol_count = excluded.symbol_count,
+                edge_count = excluded.edge_count",
+            params![repo, version, focal_version, exported_at, symbol_count as i64, edge_count as i64],
+        )?;
+        Ok(())
+    }
+
+    /// Count symbols with a given manifest_repo. Used in tests.
+    pub fn count_symbols_for_manifest(&self, manifest_repo: &str) -> Result<i64> {
+        let count: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM symbols WHERE manifest_repo = ?1",
+            params![manifest_repo],
+            |row| row.get(0),
+        )?;
+        Ok(count)
     }
 
     /// Return all user table names (for testing/diagnostics).

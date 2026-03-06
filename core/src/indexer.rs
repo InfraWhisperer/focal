@@ -191,7 +191,7 @@ impl<'a> Indexer<'a> {
 
                 // Extract and insert symbols
                 let symbols = grammar.extract_symbols(&source, &tree);
-                let inserted = self.insert_symbols_recursive(file_id, &symbols, None)?;
+                let inserted = self.insert_symbols_recursive(file_id, &symbols, None, &rel_path, language)?;
                 stats.symbols_extracted += inserted;
                 stats.files_indexed += 1;
 
@@ -270,7 +270,7 @@ impl<'a> Indexer<'a> {
             let _ = self.db.delete_edges_by_file(file_id);
             let _ = self.db.delete_symbols_by_file(file_id);
 
-            self.insert_symbols_recursive(file_id, &symbols, None)?;
+            self.insert_symbols_recursive(file_id, &symbols, None, &rel_path, language)?;
 
             if !memory_links.is_empty() {
                 let _ = self.db.relink_memories_to_symbols(file_id, &memory_links);
@@ -315,14 +315,18 @@ impl<'a> Indexer<'a> {
 
     /// Recursively insert extracted symbols and their children. Returns the count inserted.
     /// Computes a SHA-256 hash of each symbol's body for content-aware memory staleness.
+    /// Enriches `qualified_name` with file-derived module context.
     fn insert_symbols_recursive(
         &self,
         file_id: i64,
         symbols: &[ExtractedSymbol],
         parent_id: Option<i64>,
+        rel_path: &str,
+        language: &str,
     ) -> Result<usize> {
         let mut count = 0;
         for sym in symbols {
+            let qualified = compute_qualified_name(sym, rel_path, language);
             let body_hash = {
                 let mut hasher = Sha256::new();
                 hasher.update(sym.body.as_bytes());
@@ -331,6 +335,7 @@ impl<'a> Indexer<'a> {
             let sym_id = self.db.insert_symbol(
                 file_id,
                 &sym.name,
+                &qualified,
                 sym.kind.as_str(),
                 &sym.signature,
                 &sym.body,
@@ -340,7 +345,13 @@ impl<'a> Indexer<'a> {
                 parent_id,
             )?;
             count += 1;
-            count += self.insert_symbols_recursive(file_id, &sym.children, Some(sym_id))?;
+            count += self.insert_symbols_recursive(
+                file_id,
+                &sym.children,
+                Some(sym_id),
+                rel_path,
+                language,
+            )?;
         }
         Ok(count)
     }
@@ -415,5 +426,68 @@ impl<'a> Indexer<'a> {
             }
         }
         false
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Qualified name enrichment
+// ---------------------------------------------------------------------------
+
+/// Enrich a symbol's grammar-produced qualified_name with file-derived module context.
+/// Go grammars already produce `package.Symbol`, so they pass through unchanged.
+/// Rust/TS/Python get a module prefix derived from the file path.
+fn compute_qualified_name(sym: &ExtractedSymbol, rel_path: &str, language: &str) -> String {
+    // Go: grammar already produces package.Function — use as-is
+    if language == "go" {
+        return sym.qualified_name.clone();
+    }
+
+    // For Rust/TS/Python: derive module prefix from file path
+    let module = file_to_module(rel_path, language);
+    if module.is_empty() {
+        return sym.qualified_name.clone();
+    }
+
+    if sym.qualified_name.is_empty() || sym.qualified_name == sym.name {
+        format!("{module}::{}", sym.name)
+    } else {
+        // Already has some qualification (e.g., Type::method)
+        format!("{module}::{}", sym.qualified_name)
+    }
+}
+
+/// Derive a module path from a file's relative path within the repo.
+///
+/// Rust: `src/grammar/mod.rs` → `grammar`, `src/db.rs` → `db`
+/// TS/Python: `utils.ts` → `utils`, `lib/helpers.py` → `helpers`
+fn file_to_module(rel_path: &str, language: &str) -> String {
+    let p = std::path::Path::new(rel_path);
+
+    if language == "rs" {
+        let stripped = rel_path.strip_prefix("src/").unwrap_or(rel_path);
+        let sp = std::path::Path::new(stripped);
+        let components: Vec<&str> = sp
+            .components()
+            .filter_map(|c| c.as_os_str().to_str())
+            .collect();
+        if components.is_empty() {
+            return String::new();
+        }
+        let last = *components.last().unwrap();
+        if last == "mod.rs" || last == "lib.rs" {
+            components[..components.len() - 1].join("::")
+        } else {
+            components
+                .iter()
+                .map(|c| c.strip_suffix(".rs").unwrap_or(c))
+                .collect::<Vec<_>>()
+                .join("::")
+        }
+    } else {
+        // TS/Python: use filename without extension
+        p.file_stem()
+            .and_then(|s| s.to_str())
+            .unwrap_or("")
+            .to_string()
     }
 }

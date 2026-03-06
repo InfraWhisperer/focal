@@ -36,6 +36,7 @@ fn seed_db() -> (Database, i64) {
         .insert_symbol(
             file_id,
             "handle_request",
+            "",
             "function",
             "fn handle_request(req: Request) -> Response",
             &body_hr,
@@ -51,6 +52,7 @@ fn seed_db() -> (Database, i64) {
         .insert_symbol(
             file_id,
             "parse_input",
+            "",
             "function",
             "fn parse_input(req: &Request) -> Input",
             body_pi,
@@ -66,6 +68,7 @@ fn seed_db() -> (Database, i64) {
         .insert_symbol(
             file_id,
             "validate",
+            "",
             "function",
             "fn validate(input: &Input) -> bool",
             body_v,
@@ -81,6 +84,7 @@ fn seed_db() -> (Database, i64) {
         .insert_symbol(
             file_id,
             "log_error",
+            "",
             "function",
             "fn log_error(msg: &str)",
             body_le,

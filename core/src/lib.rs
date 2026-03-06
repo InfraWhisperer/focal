@@ -1,7 +1,9 @@
+pub mod config;
 pub mod context;
 pub mod db;
 pub mod grammar;
 pub mod graph;
 pub mod indexer;
+pub mod manifest;
 pub mod mcp;
 pub mod watcher;

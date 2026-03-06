@@ -93,6 +93,7 @@ fn extract_function(node: &Node, source: &[u8]) -> Option<ExtractedSymbol> {
     let signature = extract_signature(node, &body_node, source);
     let body = node_text(node, source);
     Some(ExtractedSymbol {
+        qualified_name: name.clone(),
         name,
         kind: SymbolKind::Function,
         signature,
@@ -118,6 +119,7 @@ fn extract_named_symbol(
     let body = node_text(node, source);
     let signature = extract_declaration_line(&body);
     Some(ExtractedSymbol {
+        qualified_name: name.clone(),
         name,
         kind,
         signature,
@@ -154,6 +156,7 @@ fn extract_impl(node: &Node, source: &[u8], out: &mut Vec<ExtractedSymbol>) {
             let signature = extract_signature(&child, &body_node, source);
             let body = node_text(&child, source);
             out.push(ExtractedSymbol {
+                qualified_name: name.clone(),
                 name,
                 kind: SymbolKind::Method,
                 signature,

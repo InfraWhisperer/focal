@@ -231,7 +231,12 @@ impl<'a> ContextEngine<'a> {
                 kind: sym.kind.clone(),
                 file_path,
                 signature: sym.signature.clone(),
-                body: if include_body {
+                body: if sym.source == "manifest" {
+                    format!(
+                        "[Source body not available — imported from manifest: {}. Clone the repo for full source.]",
+                        sym.manifest_repo.as_deref().unwrap_or("unknown")
+                    )
+                } else if include_body {
                     sym.body.clone()
                 } else {
                     "(full body sent earlier in session)".to_string()

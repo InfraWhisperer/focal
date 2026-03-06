@@ -15,8 +15,9 @@ impl Grammar for GoGrammar {
 
     fn extract_symbols(&self, source: &[u8], tree: &Tree) -> Vec<ExtractedSymbol> {
         let root = tree.root_node();
+        let pkg = extract_package_name(&root, source).unwrap_or_default();
         let mut symbols = Vec::new();
-        extract_top_level_symbols(&root, source, &mut symbols);
+        extract_top_level_symbols(&root, source, &pkg, &mut symbols);
         symbols
     }
 
@@ -32,46 +33,69 @@ impl Grammar for GoGrammar {
 // Symbol extraction
 // ---------------------------------------------------------------------------
 
+/// Extract the package name from a Go source file's `package_clause` node.
+fn extract_package_name(root: &Node, source: &[u8]) -> Option<String> {
+    let mut cursor = root.walk();
+    for child in root.children(&mut cursor) {
+        if child.kind() == "package_clause" {
+            let mut inner = child.walk();
+            for c in child.children(&mut inner) {
+                if c.kind() == "package_identifier" {
+                    return Some(node_text(&c, source));
+                }
+            }
+        }
+    }
+    None
+}
+
 fn extract_top_level_symbols(
     node: &Node,
     source: &[u8],
+    pkg: &str,
     out: &mut Vec<ExtractedSymbol>,
 ) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         match child.kind() {
             "function_declaration" => {
-                if let Some(sym) = extract_function(&child, source) {
+                if let Some(sym) = extract_function(&child, source, pkg) {
                     out.push(sym);
                 }
             }
             "method_declaration" => {
-                if let Some(sym) = extract_method(&child, source) {
+                if let Some(sym) = extract_method(&child, source, pkg) {
                     out.push(sym);
                 }
             }
             "type_declaration" => {
-                extract_type_decl(&child, source, out);
+                extract_type_decl(&child, source, pkg, out);
             }
             "const_declaration" => {
-                extract_const_or_var(&child, source, SymbolKind::Const, "const_spec", out);
+                extract_const_or_var(&child, source, pkg, SymbolKind::Const, "const_spec", out);
             }
             "var_declaration" => {
-                extract_const_or_var(&child, source, SymbolKind::Const, "var_spec", out);
+                extract_const_or_var(&child, source, pkg, SymbolKind::Const, "var_spec", out);
             }
             _ => {}
         }
     }
 }
 
-fn extract_function(node: &Node, source: &[u8]) -> Option<ExtractedSymbol> {
+fn extract_function(node: &Node, source: &[u8], pkg: &str) -> Option<ExtractedSymbol> {
     let name_node = node.child_by_field_name("name")?;
     let name = node_text(&name_node, source);
+    let qualified_name = if pkg.is_empty() {
+        name.clone()
+    } else {
+        format!("{pkg}.{name}")
+    };
     let body_node = node.child_by_field_name("body");
     let signature = extract_signature(node, &body_node, source);
     let body = node_text(node, source);
     Some(ExtractedSymbol {
         name,
+        qualified_name,
         kind: SymbolKind::Function,
         signature,
         body,
@@ -81,14 +105,22 @@ fn extract_function(node: &Node, source: &[u8]) -> Option<ExtractedSymbol> {
     })
 }
 
-fn extract_method(node: &Node, source: &[u8]) -> Option<ExtractedSymbol> {
+fn extract_method(node: &Node, source: &[u8], pkg: &str) -> Option<ExtractedSymbol> {
     let name_node = node.child_by_field_name("name")?;
     let name = node_text(&name_node, source);
+    let receiver_type = extract_receiver_type(node, source);
+    let qualified_name = match (&receiver_type, pkg.is_empty()) {
+        (Some(recv), false) => format!("{pkg}.{recv}.{name}"),
+        (Some(recv), true) => format!("{recv}.{name}"),
+        (None, false) => format!("{pkg}.{name}"),
+        (None, true) => name.clone(),
+    };
     let body_node = node.child_by_field_name("body");
     let signature = extract_signature(node, &body_node, source);
     let body = node_text(node, source);
     Some(ExtractedSymbol {
         name,
+        qualified_name,
         kind: SymbolKind::Method,
         signature,
         body,
@@ -98,22 +130,41 @@ fn extract_method(node: &Node, source: &[u8]) -> Option<ExtractedSymbol> {
     })
 }
 
+/// Extract the receiver type name from a method_declaration's parameter_list.
+/// For `func (s *Server) Start()`, returns `Some("Server")`.
+fn extract_receiver_type(node: &Node, source: &[u8]) -> Option<String> {
+    let receiver = node.child_by_field_name("receiver")?;
+    // Walk the parameter_list looking for a type_identifier (possibly inside pointer_type)
+    let mut stack: Vec<Node> = vec![receiver];
+    while let Some(n) = stack.pop() {
+        if n.kind() == "type_identifier" {
+            return Some(node_text(&n, source));
+        }
+        let mut cursor = n.walk();
+        for child in n.children(&mut cursor) {
+            stack.push(child);
+        }
+    }
+    None
+}
+
 fn extract_type_decl(
     node: &Node,
     source: &[u8],
+    pkg: &str,
     out: &mut Vec<ExtractedSymbol>,
 ) {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
         if child.kind() == "type_spec" {
-            if let Some(sym) = extract_type_spec(&child, source) {
+            if let Some(sym) = extract_type_spec(&child, source, pkg) {
                 out.push(sym);
             }
         }
     }
 }
 
-fn extract_type_spec(node: &Node, source: &[u8]) -> Option<ExtractedSymbol> {
+fn extract_type_spec(node: &Node, source: &[u8], pkg: &str) -> Option<ExtractedSymbol> {
     let name_node = node.child_by_field_name("name")?;
     let name = node_text(&name_node, source);
     let type_node = node.child_by_field_name("type")?;
@@ -128,9 +179,15 @@ fn extract_type_spec(node: &Node, source: &[u8]) -> Option<ExtractedSymbol> {
     let decl_node = node.parent().unwrap_or(*node);
     let body = node_text(&decl_node, source);
     let signature = format!("type {name} {}", type_node.kind().replace('_', " "));
+    let qualified_name = if pkg.is_empty() {
+        name.clone()
+    } else {
+        format!("{pkg}.{name}")
+    };
 
     Some(ExtractedSymbol {
         name,
+        qualified_name,
         kind,
         signature,
         body,
@@ -143,6 +200,7 @@ fn extract_type_spec(node: &Node, source: &[u8]) -> Option<ExtractedSymbol> {
 fn extract_const_or_var(
     node: &Node,
     source: &[u8],
+    pkg: &str,
     kind: SymbolKind,
     spec_kind: &str,
     out: &mut Vec<ExtractedSymbol>,
@@ -152,10 +210,16 @@ fn extract_const_or_var(
         if child.kind() == spec_kind {
             if let Some(name_node) = child.child_by_field_name("name") {
                 let name = node_text(&name_node, source);
+                let qualified_name = if pkg.is_empty() {
+                    name.clone()
+                } else {
+                    format!("{pkg}.{name}")
+                };
                 let body = node_text(node, source);
                 let signature = extract_declaration_line(&body);
                 out.push(ExtractedSymbol {
                     name,
+                    qualified_name,
                     kind: kind.clone(),
                     signature,
                     body,

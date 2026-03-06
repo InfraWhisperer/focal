@@ -47,6 +47,7 @@ impl SymbolKind {
 #[derive(Debug, Clone)]
 pub struct ExtractedSymbol {
     pub name: String,
+    pub qualified_name: String,
     pub kind: SymbolKind,
     pub signature: String,
     pub body: String,

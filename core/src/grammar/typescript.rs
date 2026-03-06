@@ -102,6 +102,7 @@ fn extract_function(node: &Node, source: &[u8]) -> Option<ExtractedSymbol> {
     let signature = extract_signature(node, &body_node, source);
     let body = node_text(node, source);
     Some(ExtractedSymbol {
+        qualified_name: name.clone(),
         name,
         kind: SymbolKind::Function,
         signature,
@@ -117,13 +118,14 @@ fn extract_class(node: &Node, source: &[u8]) -> Option<ExtractedSymbol> {
     let name = node_text(&name_node, source);
     let body = node_text(node, source);
 
-    // Extract methods as children
+    // Extract methods as children with ClassName::method qualified names
     let mut children = Vec::new();
     if let Some(class_body) = node.child_by_field_name("body") {
         let mut cursor = class_body.walk();
         for child in class_body.children(&mut cursor) {
             if child.kind() == "method_definition" {
-                if let Some(method) = extract_method(&child, source) {
+                if let Some(mut method) = extract_method(&child, source) {
+                    method.qualified_name = format!("{name}::{}", method.name);
                     children.push(method);
                 }
             }
@@ -134,6 +136,7 @@ fn extract_class(node: &Node, source: &[u8]) -> Option<ExtractedSymbol> {
     let signature = extract_signature(node, &body_node, source);
 
     Some(ExtractedSymbol {
+        qualified_name: name.clone(),
         name,
         kind: SymbolKind::Class,
         signature,
@@ -151,6 +154,7 @@ fn extract_method(node: &Node, source: &[u8]) -> Option<ExtractedSymbol> {
     let signature = extract_signature(node, &body_node, source);
     let body = node_text(node, source);
     Some(ExtractedSymbol {
+        qualified_name: name.clone(),
         name,
         kind: SymbolKind::Method,
         signature,
@@ -171,6 +175,7 @@ fn extract_named_symbol(
     let body = node_text(node, source);
     let signature = extract_declaration_line(&body);
     Some(ExtractedSymbol {
+        qualified_name: name.clone(),
         name,
         kind,
         signature,
@@ -197,6 +202,7 @@ fn extract_const_declaration(node: &Node, source: &[u8], out: &mut Vec<Extracted
                 let body = node_text(node, source);
                 let signature = extract_declaration_line(&body);
                 out.push(ExtractedSymbol {
+                    qualified_name: name.clone(),
                     name,
                     kind: SymbolKind::Const,
                     signature,

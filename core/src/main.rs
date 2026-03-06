@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use rmcp::ServiceExt;
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService,
@@ -19,14 +19,14 @@ use focal_core::watcher::FileWatcher;
 
 #[derive(Parser)]
 #[command(name = "focal", about = "Structural code index for Claude Code")]
+#[command(args_conflicts_with_subcommands = true)]
 struct Cli {
-    /// Workspace root paths to index
-    #[arg(required_unless_present = "init")]
-    paths: Vec<std::path::PathBuf>,
+    #[command(subcommand)]
+    command: Option<Commands>,
 
-    /// Run interactive setup wizard
-    #[arg(long)]
-    init: bool,
+    /// Workspace root paths to index (backwards-compatible shorthand for `focal serve`)
+    #[arg(global = false)]
+    paths: Vec<PathBuf>,
 
     /// Run HTTP MCP server instead of stdio
     #[arg(long)]
@@ -35,6 +35,36 @@ struct Cli {
     /// HTTP port (only with --http)
     #[arg(long, default_value = "3100")]
     port: u16,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Index workspace(s) and serve MCP (default behavior)
+    Serve {
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
+        #[arg(long)]
+        http: bool,
+        #[arg(long, default_value = "3100")]
+        port: u16,
+    },
+    /// Run interactive setup wizard
+    Init,
+    /// Export symbol manifest for the current repo
+    Export {
+        #[arg(default_value = ".")]
+        path: PathBuf,
+        #[arg(long, short)]
+        output: Option<PathBuf>,
+    },
+    /// Import symbol manifest(s) from another repo
+    Import {
+        source: Option<PathBuf>,
+        #[arg(long)]
+        dir: Option<PathBuf>,
+        #[arg(long)]
+        git: Option<String>,
+    },
 }
 
 fn run_init_wizard() -> anyhow::Result<()> {
@@ -89,23 +119,117 @@ fn run_init_wizard() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive("focal=info".parse()?),
-        )
-        .with_writer(std::io::stderr)
-        .init();
+fn run_export(path: PathBuf, output: Option<PathBuf>) -> anyhow::Result<()> {
+    let workspace = path.canonicalize()?;
 
-    let cli = Cli::parse();
+    let db_dir = dirs::home_dir()
+        .expect("failed to determine home directory")
+        .join(".focal");
+    let db_path = db_dir.join("index.db");
 
-    if cli.init {
-        return run_init_wizard();
+    if !db_path.exists() {
+        anyhow::bail!(
+            "no Focal database found at {}. Run 'focal serve' first.",
+            db_path.display()
+        );
     }
 
-    tracing::info!(paths = ?cli.paths, "starting focal");
+    let db = focal_core::db::Database::open(&db_path.to_string_lossy())?;
+
+    let repo = db
+        .get_repository_by_path(&workspace.to_string_lossy())?
+        .ok_or_else(|| {
+            anyhow::anyhow!(
+                "no index found for {}. Run 'focal serve {}' first.",
+                workspace.display(),
+                workspace.display()
+            )
+        })?;
+
+    let manifest = focal_core::manifest::export_manifest(&db, repo.id, &repo.name)?;
+
+    let out_path = match output {
+        Some(p) => p,
+        None => {
+            let focal_dir = workspace.join(".focal");
+            std::fs::create_dir_all(&focal_dir)?;
+            focal_dir.join("manifest.json")
+        }
+    };
+
+    let json = serde_json::to_string_pretty(&manifest)?;
+    std::fs::write(&out_path, &json)?;
+
+    eprintln!(
+        "Exported {} symbols and {} edges to {}",
+        manifest.symbols.len(),
+        manifest.edges.len(),
+        out_path.display()
+    );
+
+    Ok(())
+}
+
+fn run_import(
+    source: Option<PathBuf>,
+    dir: Option<PathBuf>,
+    git: Option<String>,
+) -> anyhow::Result<()> {
+    let db_dir = dirs::home_dir()
+        .expect("failed to determine home directory")
+        .join(".focal");
+    std::fs::create_dir_all(&db_dir)?;
+    let db_path = db_dir.join("index.db");
+    let db = focal_core::db::Database::open(&db_path.to_string_lossy())?;
+
+    let mut manifests_to_import: Vec<PathBuf> = Vec::new();
+
+    if let Some(src) = source {
+        manifests_to_import.push(src);
+    }
+
+    if let Some(d) = dir {
+        for entry in std::fs::read_dir(&d)? {
+            let entry = entry?;
+            let path = entry.path();
+            if path.extension().is_some_and(|e| e == "json") {
+                manifests_to_import.push(path);
+            }
+        }
+    }
+
+    let git_imported = if let Some(url) = git {
+        let manifest = focal_core::manifest::fetch_manifest(&url)?;
+        let (syms, edges) = focal_core::manifest::import_manifest(&db, &manifest)?;
+        eprintln!(
+            "Imported {} symbols and {} edges from {}",
+            syms, edges, manifest.repo
+        );
+        true
+    } else {
+        false
+    };
+
+    if manifests_to_import.is_empty() && !git_imported {
+        anyhow::bail!(
+            "no manifest source specified. Use: focal import <path>, --dir <dir>, or --git <url>"
+        );
+    }
+
+    for path in &manifests_to_import {
+        let manifest = focal_core::manifest::load_manifest(path)?;
+        let (syms, edges) = focal_core::manifest::import_manifest(&db, &manifest)?;
+        eprintln!(
+            "Imported {} symbols and {} edges from {}",
+            syms, edges, manifest.repo
+        );
+    }
+
+    Ok(())
+}
+
+async fn run_serve(paths: Vec<PathBuf>, http: bool, port: u16) -> anyhow::Result<()> {
+    tracing::info!(?paths, "starting focal");
 
     // Resolve DB path: ~/.focal/index.db
     let db_dir = dirs::home_dir()
@@ -126,13 +250,13 @@ async fn main() -> anyhow::Result<()> {
 
     // Wrap DB in Arc<Mutex<>> before spawning background work
     let db = Arc::new(Mutex::new(db));
-    let workspace_roots: Vec<_> = cli.paths.clone();
+    let workspace_roots: Vec<_> = paths.clone();
 
     // Index each workspace root in the background so MCP starts serving immediately
     let indexing_complete = Arc::new(AtomicBool::new(false));
     {
         let db_clone = Arc::clone(&db);
-        let paths = cli.paths.clone();
+        let paths = paths.clone();
         let indexing_complete_clone = Arc::clone(&indexing_complete);
         tokio::task::spawn_blocking(move || {
             let registry = GrammarRegistry::new();
@@ -173,10 +297,71 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
+    // Auto-import manifests from config
+    {
+        let db_clone = Arc::clone(&db);
+        tokio::task::spawn_blocking(move || {
+            let config = focal_core::config::FocalConfig::load();
+
+            let has_work = !config.manifests.auto_import.is_empty()
+                || !config.manifests.auto_import_git.is_empty();
+            if !has_work {
+                return;
+            }
+
+            let db = match db_clone.lock() {
+                Ok(db) => db,
+                Err(e) => {
+                    tracing::error!(error = %e, "failed to lock DB for auto-import");
+                    return;
+                }
+            };
+
+            // Filesystem imports
+            for path_str in &config.manifests.auto_import {
+                let path = std::path::Path::new(path_str);
+                if path.is_dir() {
+                    if let Ok(entries) = std::fs::read_dir(path) {
+                        for entry in entries.flatten() {
+                            let p = entry.path();
+                            if p.extension().is_some_and(|e| e == "json") {
+                                match focal_core::manifest::load_manifest(&p) {
+                                    Ok(m) => match focal_core::manifest::import_manifest(&db, &m) {
+                                        Ok((s, e)) => tracing::info!(symbols = s, edges = e, repo = %m.repo, "auto-imported manifest"),
+                                        Err(e) => tracing::warn!(error = %e, path = %p.display(), "manifest import failed"),
+                                    },
+                                    Err(e) => tracing::warn!(error = %e, path = %p.display(), "manifest load failed"),
+                                }
+                            }
+                        }
+                    }
+                } else if path.is_file() {
+                    match focal_core::manifest::load_manifest(path) {
+                        Ok(m) => match focal_core::manifest::import_manifest(&db, &m) {
+                            Ok((s, e)) => tracing::info!(symbols = s, edges = e, repo = %m.repo, "auto-imported manifest"),
+                            Err(e) => tracing::warn!(error = %e, path = %path_str, "manifest import failed"),
+                        },
+                        Err(e) => tracing::warn!(error = %e, path = %path_str, "manifest load failed"),
+                    }
+                }
+            }
+
+            // Git imports — skip silently on network failure
+            for url in &config.manifests.auto_import_git {
+                if let Ok(m) = focal_core::manifest::fetch_manifest(url) {
+                    match focal_core::manifest::import_manifest(&db, &m) {
+                        Ok((s, e)) => tracing::info!(symbols = s, edges = e, repo = %m.repo, "auto-imported git manifest"),
+                        Err(e) => tracing::warn!(error = %e, url = %url, "git manifest import failed"),
+                    }
+                }
+            }
+        });
+    }
+
     // Spawn file watcher for incremental re-indexing
     {
         let db_clone = Arc::clone(&db);
-        let roots: Vec<PathBuf> = cli.paths.clone();
+        let roots: Vec<PathBuf> = paths.clone();
         let registry = GrammarRegistry::new();
         tokio::spawn(async move {
             let watcher = match FileWatcher::new(&roots, 500) {
@@ -244,8 +429,7 @@ async fn main() -> anyhow::Result<()> {
         });
     }
 
-    if cli.http {
-        let port = cli.port;
+    if http {
         let ct = CancellationToken::new();
 
         let indexing_complete_http = Arc::clone(&indexing_complete);
@@ -289,4 +473,36 @@ async fn main() -> anyhow::Result<()> {
     running.waiting().await?;
 
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive("focal=info".parse()?),
+        )
+        .with_writer(std::io::stderr)
+        .init();
+
+    let cli = Cli::parse();
+
+    match cli.command {
+        Some(Commands::Serve { paths, http, port }) => {
+            run_serve(paths, http, port).await
+        }
+        Some(Commands::Init) => run_init_wizard(),
+        Some(Commands::Export { path, output }) => run_export(path, output),
+        Some(Commands::Import { source, dir, git }) => run_import(source, dir, git),
+        None => {
+            // Backwards compat: bare `focal /path [--http] [--port N]` maps to serve
+            if cli.paths.is_empty() {
+                // No subcommand and no paths — print help
+                use clap::CommandFactory;
+                Cli::command().print_help()?;
+                std::process::exit(0);
+            }
+            run_serve(cli.paths, cli.http, cli.port).await
+        }
+    }
 }

@@ -13,6 +13,7 @@ fn setup_db_with_symbols() -> (Database, i64, i64) {
     db.insert_symbol(
         file_id,
         "Config",
+        "",
         "struct",
         "pub struct Config",
         "pub struct Config { pub port: u16, pub host: String }",
@@ -26,6 +27,7 @@ fn setup_db_with_symbols() -> (Database, i64, i64) {
     db.insert_symbol(
         file_id,
         "handle_request",
+        "",
         "function",
         "pub fn handle_request(req: Request) -> Response",
         "pub fn handle_request(req: Request) -> Response { let cfg = Config::default(); todo!() }",
@@ -39,6 +41,7 @@ fn setup_db_with_symbols() -> (Database, i64, i64) {
     db.insert_symbol(
         file_id,
         "validate",
+        "",
         "function",
         "fn validate(input: &str) -> Result<(), Error>",
         "fn validate(input: &str) -> Result<(), Error> { if input.is_empty() { return Err(Error::Empty); } Ok(()) }",
